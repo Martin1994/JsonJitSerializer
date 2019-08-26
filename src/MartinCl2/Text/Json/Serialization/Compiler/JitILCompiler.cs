@@ -166,7 +166,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 Action pushPropertyValueOntoStack = () => {
                     // obj.Property
                     that._ilg.Emit(OpCodes.Ldarg_1);
-                    that._ilg.Emit(OpCodes.Call, getMethod);
+                    that.GenerateILforCallingGetMethod(getMethod);
                 };
 
                 if (converter == null)

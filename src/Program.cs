@@ -55,28 +55,47 @@ namespace JsonJIT
 
             public int C { get; set; }
 
-            [AddressConverterAttribute]
-            public Address D { get; set; }
+            public bool[] D { get; set; }
 
-            public bool[] E { get; set; }
+            public virtual string Name { get => "TestPoco"; }
+        }
+
+        public class TestPocoSub : TestPoco
+        {
+
+            public double SubA { get; set; }
+
+            [AddressConverterAttribute]
+            public Address SubB { get; set; }
+
+            public override string Name { get => "TestPocoSub"; }
         }
 
         static void Main(string[] args)
         {
             TestPoco poco = new TestPoco(){
-                A = "123",
-                B = DateTime.Now,
-                C = 7,
-                D = new Address() {
-                    number = 120,
-                    street = "Bremner Blvd."
-                },
-                E = new bool[] { false, false, true, false, true, false, true, false }
+                A = "test"
             };
 
             Nested<Nested<TestPoco>> obj = new Nested<Nested<TestPoco>>(new Nested<TestPoco>(poco));
 
             Console.WriteLine(CompileAndSerialize(obj));
+
+            TestPocoSub pocoSub = new TestPocoSub(){
+                A = "123",
+                B = DateTime.Now,
+                C = 7,
+                D = new bool[] { false, false, true, false, true, false, true, false },
+                SubA = Math.PI,
+                SubB = new Address() {
+                    number = 120,
+                    street = "Bremner Blvd."
+                }
+            };
+
+            Console.WriteLine(CompileAndSerialize(pocoSub));
+
+            Console.WriteLine(CompileAndSerialize((TestPoco)pocoSub));
         }
 
         static string CompileAndSerialize<T>(T obj)

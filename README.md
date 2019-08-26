@@ -23,3 +23,4 @@ other hardcoded static fields including all converters needed for serialization 
 * Benchmark.
 * Cache compiled code by `Type`/`JsonSerializerOptions` pair.
 * Unit tests.
+* Optionally skip null
