@@ -12,11 +12,14 @@ Modify `Program.cs`.
 
 For each object type, the compiler will create a dynamic class inside a dynamic assembly,
 which contains a static method to serialize an object instance of that type, as well as
-all converters needed for serialization in its static fields.
+other hardcoded static fields including all converters needed for serialization and
+`JsonSerializerOptions`.
 
 # Roadmap (randomly ordered)
 
 * Support async call by introducing a stack.
-* Support IEnumerable and IDictionary.
-* Compile with `JsonSerializerOptions`.
+* Support `IDictionary`.
+* Support element converter for `IEnumerable`.
 * Benchmark.
+* Cache compiled code by `Type`/`JsonSerializerOptions` pair.
+* Unit tests.
