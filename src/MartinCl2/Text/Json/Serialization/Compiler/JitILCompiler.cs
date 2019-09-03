@@ -25,6 +25,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
         private static int _compiledCount = -1;
 
         private static readonly string SerializeMethodName = @"Serialize";
+        private static readonly string SerializeChunkMethodName = @"SerializeChunk";
 
         public static Type Compile(Type payloadType, JsonSerializerOptions options)
         {
@@ -36,7 +37,8 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             );
 
             JitILCompiler compiler = new JitILCompiler(payloadType, options, tb);
-            compiler.GenerateIL();
+            compiler.GenerateChunkIL();
+            compiler.GenerateNonChunkIL();
 
             Type compiledSerializerType = tb.CreateType();
 
@@ -51,7 +53,11 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private readonly JsonSerializerOptions _options;
 
-        private readonly ILGenerator _ilg;
+        private readonly FieldBuilder _optionsField;
+
+        private ILGenerator _ilg;
+
+        private bool _generatingChunkMethod;
 
         private readonly TypeBuilder _tb;
 
@@ -63,36 +69,19 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private JitILCompiler(Type type, JsonSerializerOptions options, TypeBuilder tb)
         {
-            MethodBuilder mb = tb.DefineMethod(
-                name: SerializeMethodName,
-                attributes: MethodAttributes.Public | MethodAttributes.Virtual,
-                callingConvention: CallingConventions.Standard,
-                returnType: typeof(bool),
-                parameterTypes: new Type[] { typeof(Utf8JsonWriter), type }
-            );
-
-            tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(type).GetMethod(SerializeMethodName));
-
             _type = type;
             _options = options;
             _tb = tb;
-            _ilg = mb.GetILGenerator();
+            _ilg = null;
             _followUp = null;
             _writeStack = new List<FieldBuilder>();
             _converterCounter = -1;
             _converterCache = new Dictionary<JsonConverter, FieldBuilder>();
-        }
-
-        private void GenerateIL()
-        {
-            // arg0: ObjectSerialier this
-            // arg1: Utf8JsonWriter writer
-            // arg2: T obj
-
+            _generatingChunkMethod = default(bool);
+            
             // Define a static field for JsonSerializerOptions
-            JsonSerializerOptions options = _options;
             string optionsFieldName = @"Options";
-            FieldBuilder optionsField = _tb.DefineField(
+            _optionsField = _tb.DefineField(
                 fieldName: optionsFieldName,
                 type: typeof(JsonSerializerOptions),
                 attributes: FieldAttributes.Public | FieldAttributes.Static
@@ -102,20 +91,72 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 FieldInfo field = type.GetField(optionsFieldName);
                 field.SetValue(null, options);
             };
+        }
+
+        private void GenerateChunkIL()
+        {
+            _generatingChunkMethod = true;
+            
+            MethodBuilder mb = _tb.DefineMethod(
+                name: SerializeChunkMethodName,
+                attributes: MethodAttributes.Public | MethodAttributes.Virtual,
+                callingConvention: CallingConventions.Standard,
+                returnType: typeof(bool),
+                parameterTypes: new Type[] { typeof(Utf8JsonWriter), _type }
+            );
+
+            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_type).GetMethod(SerializeChunkMethodName));
+
+            _ilg = mb.GetILGenerator();
+
+            // arg0: ObjectSerialier this
+            // arg1: Utf8JsonWriter writer
+            // arg2: T obj
 
             // _writeStack0 = obj;
             FieldInfo writeStackRoot = GetWriteStackFieldAtDepth(0);
             _ilg.Emit(OpCodes.Ldarg_0);
             _ilg.Emit(OpCodes.Ldarg_2);
             _ilg.Emit(OpCodes.Stfld, writeStackRoot);
-            GenerateILForProperty(_type, optionsField, 0);
+            GenerateILForProperty(_type, 0);
 
             // return false;
             _ilg.Emit(OpCodes.Ldc_I4_0);
             _ilg.Emit(OpCodes.Ret);
         }
 
-        private void GenerateILForProperty(Type currentType, FieldBuilder optionsField, int depth)
+        private void GenerateNonChunkIL()
+        {
+            _generatingChunkMethod = false;
+            
+            MethodBuilder mb = _tb.DefineMethod(
+                name: SerializeMethodName,
+                attributes: MethodAttributes.Public | MethodAttributes.Virtual,
+                callingConvention: CallingConventions.Standard,
+                returnType: typeof(void),
+                parameterTypes: new Type[] { typeof(Utf8JsonWriter), _type }
+            );
+
+            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_type).GetMethod(SerializeMethodName));
+
+            _ilg = mb.GetILGenerator();
+
+            // arg0: ObjectSerialier this
+            // arg1: Utf8JsonWriter writer
+            // arg2: T obj
+
+            // _writeStack0 = obj;
+            FieldInfo writeStackRoot = GetWriteStackFieldAtDepth(0);
+            _ilg.Emit(OpCodes.Ldarg_0);
+            _ilg.Emit(OpCodes.Ldarg_2);
+            _ilg.Emit(OpCodes.Stfld, writeStackRoot);
+            GenerateILForProperty(_type, 0);
+
+            // return;
+            _ilg.Emit(OpCodes.Ret);
+        }
+
+        private void GenerateILForProperty(Type currentType, int depth)
         {
             Label objIsNull = _ilg.DefineLabel();
             Label endOfSerailation = _ilg.DefineLabel();
@@ -130,11 +171,11 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             if (currentType.GetInterfaces().Any(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>)))
             {
-                GenerateILForIEnumerable(currentType, optionsField, depth);
+                GenerateILForIEnumerable(currentType, depth);
             }
             else
             {
-                GenerateILForObject(currentType, optionsField, depth);
+                GenerateILForObject(currentType, depth);
             }
 
             if (!currentType.IsValueType)
@@ -152,7 +193,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             }
         }
 
-        private void GenerateILForObject(Type currentType, FieldBuilder optionsField, int depth)
+        private void GenerateILForObject(Type currentType, int depth)
         {
             // writer.WriteStartObject();
             _ilg.Emit(OpCodes.Ldarg_1);
@@ -190,9 +231,9 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
                 if (converter == null)
                 {
-                    GenerateILForNestedType(property.PropertyType, optionsField, depth, pushPropertyValueOntoStack);
+                    GenerateILForNestedType(property.PropertyType, depth, pushPropertyValueOntoStack);
                 } else {
-                    GenerateILForCallingConverter(property.PropertyType, pushPropertyValueOntoStack, converter, optionsField);
+                    GenerateILForCallingConverter(property.PropertyType, pushPropertyValueOntoStack, converter);
                 }
             }
 
@@ -201,7 +242,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Call, _writeEndObject);
         }
 
-        private void GenerateILForIEnumerable(Type currentType, FieldBuilder optionsField, int depth)
+        private void GenerateILForIEnumerable(Type currentType, int depth)
         {
             // First agrument: Utf8JsonWriter writer
             // Second argument: IEnumerable<T> enumerable
@@ -242,10 +283,10 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             if (converter == null)
             {
-                GenerateILForNestedType(elementType, optionsField, depth, pushNextElementOntoStack);
+                GenerateILForNestedType(elementType, depth, pushNextElementOntoStack);
             }
             else {
-                GenerateILForCallingConverter(elementType, pushNextElementOntoStack, converter, optionsField);
+                GenerateILForCallingConverter(elementType, pushNextElementOntoStack, converter);
             }
 
             // }
@@ -257,7 +298,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Call, _writeEndArray);
         }
 
-        private void GenerateILForNestedType(Type nestedType, FieldBuilder optionsField, int depth, Action pushNestedValueOntoStack)
+        private void GenerateILForNestedType(Type nestedType, int depth, Action pushNestedValueOntoStack)
         {
             // _writeStackX = nextElement;
             _ilg.Emit(OpCodes.Ldarg_0);
@@ -268,7 +309,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             }
             pushNestedValueOntoStack();
             _ilg.Emit(OpCodes.Stfld, GetWriteStackFieldAtDepth(depth + 1));
-            GenerateILForProperty(nestedType, optionsField, depth + 1);
+            GenerateILForProperty(nestedType, depth + 1);
         }
 
         private void GenerateILForWritingPropertyName(PropertyInfo property)
@@ -290,7 +331,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Call, _writePropertyName);
         }
 
-        private void GenerateILForCallingConverter(Type valueType, Action pushValueOntoStack, JsonConverter converter, FieldInfo optionsField)
+        private void GenerateILForCallingConverter(Type valueType, Action pushValueOntoStack, JsonConverter converter)
         {
             if (!converter.CanConvert(valueType))
             {
@@ -326,7 +367,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Ldsfld, converterField);
             _ilg.Emit(OpCodes.Ldarg_1);
             pushValueOntoStack();
-            _ilg.Emit(OpCodes.Ldsfld, optionsField);
+            _ilg.Emit(OpCodes.Ldsfld, _optionsField);
             _ilg.Emit(OpCodes.Callvirt, converterGenericType.GetMethod("Write", new Type[] {
                 typeof(Utf8JsonWriter),
                 converterGenericTypeParameter,

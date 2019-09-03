@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Tasks;
 using MartinCl2.Text.Json.Serialization.Compiler;
 
 namespace MartinCl2.Text.Json.Serialization
@@ -29,9 +30,12 @@ namespace MartinCl2.Text.Json.Serialization
     public abstract class JsonJitSerializer<T>
     {
         public abstract string Serialize(T value);
+
+        public abstract Task<string> SerializeAsync(T value);
+
     }
 
-    public class JsonJitSerializer<TValue, TSerializer> : JsonJitSerializer<TValue> 
+    public sealed class JsonJitSerializer<TValue, TSerializer> : JsonJitSerializer<TValue> 
         where TSerializer : IObjectSerialier<TValue>
     {
         public override string Serialize(TValue value)
@@ -40,7 +44,21 @@ namespace MartinCl2.Text.Json.Serialization
             using (Utf8JsonWriter writer = new Utf8JsonWriter(output))
             {
                 TSerializer jitSerializer = default(TSerializer); // TSerializer should be a struct
-                while (jitSerializer.Serialize(writer, value));
+                jitSerializer.Serialize(writer, value);
+            }
+            return Encoding.UTF8.GetString(output.WrittenSpan);
+        }
+
+        public override async Task<string> SerializeAsync(TValue value)
+        {
+            ArrayBufferWriter<byte> output = new ArrayBufferWriter<byte>();
+            using (Utf8JsonWriter writer = new Utf8JsonWriter(output))
+            {
+                TSerializer jitSerializer = default(TSerializer); // TSerializer should be a struct
+                while (jitSerializer.SerializeChunk(writer, value)) {
+                    await writer.FlushAsync();
+                }
+                await writer.FlushAsync();
             }
             return Encoding.UTF8.GetString(output.WrittenSpan);
         }
