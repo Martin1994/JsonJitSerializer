@@ -26,26 +26,25 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private static readonly string SerializeMethodName = @"Serialize";
 
-        public static MethodInfo Compile(Type type, JsonSerializerOptions options)
+        public static MethodInfo Compile(Type payloadType, JsonSerializerOptions options)
         {
             TypeBuilder tb = JitAssembly.JitModuleBuilder.DefineType(
                 JitAssembly.GeneratedModuleNamespace + @".ObjectSerialier" + (Interlocked.Increment(ref _compiledCount) - 1));
 
-            JitILCompiler compiler = new JitILCompiler(type, options, tb);
-            Action<Type>[] followUps = compiler.GenerateIL().ToArray();
+            JitILCompiler compiler = new JitILCompiler(payloadType, options, tb);
+            compiler.GenerateIL();
 
-            Type compiledType = tb.CreateType();
+            Type compiledSerializerType = tb.CreateType();
 
-            foreach (Action<Type> followUp in followUps)
-            {
-                followUp(compiledType);
-            }
+            compiler._followUp(compiledSerializerType);
 
-            return compiledType.GetMethod(
+            return compiledSerializerType.GetMethod(
                 name: SerializeMethodName,
-                types: new Type[] { typeof(Utf8JsonWriter), type }
+                types: new Type[] { typeof(Utf8JsonWriter), payloadType }
             );
         }
+
+        private Action<Type> _followUp;
 
         private readonly Type _type;
 
@@ -69,9 +68,10 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _options = options;
             _tb = tb;
             _ilg = mb.GetILGenerator();
+            _followUp = null;
         }
 
-        private IEnumerable<Action<Type>> GenerateIL()
+        private void GenerateIL()
         {
             // First agrument: Utf8JsonWriter writer
             // Second argument: T obj
@@ -84,7 +84,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 type: typeof(JsonSerializerOptions),
                 attributes: FieldAttributes.Public | FieldAttributes.Static
             );
-            yield return type => {
+            _followUp += type => {
                 FieldInfo field = type.GetField(optionsFieldName);
                 field.SetValue(null, options);
             };
@@ -100,15 +100,11 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             if (_type.GetInterfaces().Any(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>)))
             {
-                foreach (Action<Type> followUp in GenerateILForIEnumerable(optionsField)) {
-                    yield return followUp;
-                }
+                GenerateILForIEnumerable(optionsField);
             }
             else
             {
-                foreach (Action<Type> followUp in GenerateILForObject(optionsField)) {
-                    yield return followUp;
-                }
+                GenerateILForObject(optionsField);
             }
 
             // return false;
@@ -131,7 +127,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             }
         }
 
-        private IEnumerable<Action<Type>> GenerateILForObject(FieldBuilder optionsField)
+        private void GenerateILForObject(FieldBuilder optionsField)
         {
             // First agrument: Utf8JsonWriter writer
             // Second argument: T obj
@@ -178,7 +174,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                     _ilg.Emit(OpCodes.Call, JitILCompiler.Compile(property.PropertyType, _options));
                     _ilg.Emit(OpCodes.Pop);
                 } else {
-                    yield return GenerateILForCallingConverter(property.PropertyType, property.Name, pushPropertyValueOntoStack, converter, optionsField);
+                    GenerateILForCallingConverter(property.PropertyType, property.Name, pushPropertyValueOntoStack, converter, optionsField);
                 }
             }
 
@@ -187,7 +183,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Call, _writeEndObject);
         }
 
-        private IEnumerable<Action<Type>> GenerateILForIEnumerable(FieldBuilder optionsField)
+        private void GenerateILForIEnumerable(FieldBuilder optionsField)
         {
             // First agrument: Utf8JsonWriter writer
             // Second argument: IEnumerable<T> enumerable
@@ -234,7 +230,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 _ilg.Emit(OpCodes.Call, JitILCompiler.Compile(elementType, _options));
                 _ilg.Emit(OpCodes.Pop);
             } else {
-                yield return GenerateILForCallingConverter(elementType, "Element", pushNextElementOntoStack, converter, optionsField);
+                GenerateILForCallingConverter(elementType, "Element", pushNextElementOntoStack, converter, optionsField);
             }
 
             // }
@@ -265,7 +261,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Call, _writePropertyName);
         }
 
-        private Action<Type> GenerateILForCallingConverter(Type valueType, string valueName, Action pushValueOntoStack, JsonConverter converter, FieldInfo optionsField)
+        private void GenerateILForCallingConverter(Type valueType, string valueName, Action pushValueOntoStack, JsonConverter converter, FieldInfo optionsField)
         {
             if (!converter.CanConvert(valueType))
             {
@@ -298,7 +294,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 typeof(JsonSerializerOptions)
             }));
 
-            return type => {
+            _followUp += type => {
                 FieldInfo field = type.GetField(fieldName);
                 field.SetValue(null, converter);
             };
