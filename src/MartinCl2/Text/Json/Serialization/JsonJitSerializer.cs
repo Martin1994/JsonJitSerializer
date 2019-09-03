@@ -20,32 +20,27 @@ namespace MartinCl2.Text.Json.Serialization
             {
                 options = DefaultSerializerOptions;
             }
-            // TODO: IList, IDictionary, null check
-            return new JsonJitSerializer<T>(
-                JitILCompiler
-                    .Compile(typeof(T), options)
-                    .CreateDelegate(typeof(JsonJitSerializer<T>.SerializeChunkDelegate))
-                as JsonJitSerializer<T>.SerializeChunkDelegate
-            );
+
+            Type jitSerializerType = JitILCompiler.Compile(typeof(T), options);
+            return (JsonJitSerializer<T>)Activator.CreateInstance(typeof(JsonJitSerializer<,>).MakeGenericType(typeof(T), jitSerializerType));
         }
     }
 
-    public class JsonJitSerializer<T>
+    public abstract class JsonJitSerializer<T>
     {
-        public delegate bool SerializeChunkDelegate(Utf8JsonWriter writer, T obj);
-        private readonly SerializeChunkDelegate _serializeChunk;
+        public abstract string Serialize(T value);
+    }
 
-        public JsonJitSerializer(SerializeChunkDelegate serializeChunk)
-        {
-            _serializeChunk = serializeChunk;
-        }
-
-        public string Serialize(T value)
+    public class JsonJitSerializer<TValue, TSerializer> : JsonJitSerializer<TValue> 
+        where TSerializer : IObjectSerialier<TValue>
+    {
+        public override string Serialize(TValue value)
         {
             ArrayBufferWriter<byte> output = new ArrayBufferWriter<byte>();
             using (Utf8JsonWriter writer = new Utf8JsonWriter(output))
             {
-                while (_serializeChunk(writer, value));
+                TSerializer jitSerializer = default(TSerializer); // TSerializer should be a struct
+                while (jitSerializer.Serialize(writer, value));
             }
             return Encoding.UTF8.GetString(output.WrittenSpan);
         }

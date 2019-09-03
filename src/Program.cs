@@ -71,6 +71,11 @@ namespace JsonJIT
             public override string Name { get => "TestPocoSub"; }
         }
 
+        public class SimplePoco
+        {
+            public string Name { get; set; }
+        }
+
         static void Main(string[] args)
         {
             TestPoco poco = new TestPoco(){
@@ -96,6 +101,12 @@ namespace JsonJIT
             Console.WriteLine(CompileAndSerialize(pocoSub));
 
             Console.WriteLine(CompileAndSerialize((TestPoco)pocoSub));
+
+            SimplePoco simplePoco = new SimplePoco() {
+                Name = "Value"
+            };
+
+            Console.WriteLine(CompileAndSerialize(simplePoco));
         }
 
         static string CompileAndSerialize<T>(T obj)
