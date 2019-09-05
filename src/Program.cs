@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 using MartinCl2.Text.Json.Serialization;
 
 namespace JsonJIT
@@ -14,12 +15,13 @@ namespace JsonJIT
             public T Second { get => payload; }
             public T Third { get => payload; }
 
-            public Nested(T payload) {
+            public Nested(T payload)
+            {
                 this.payload = payload;
             }
         }
 
-        public class Address
+        public struct Address
         {
             public uint number { get; set; }
             public string street { get; set; }
@@ -65,10 +67,17 @@ namespace JsonJIT
 
             public double SubA { get; set; }
 
-            [AddressConverterAttribute]
-            public Address SubB { get; set; }
+            private Address _subB;
+            [AddressConverter]
+            public Address SubB { get => _subB; set => _subB = value; } // Test converter
+            public ref Address RefSubB { get => ref _subB; } // Test converter with ref struct
 
-            public override string Name { get => "TestPocoSub"; }
+            private Address _subC;
+            public Address SubC { get => _subC; set => _subC = value; } // Test struct
+            public ref Address RefSubC { get => ref _subC; } // Test ref struct
+
+            [JsonPropertyName("overridden-name")] // Test custom name
+            public override string Name { get => "TestPocoSub"; } // Test virtual call
         }
 
         public class SimplePoco
@@ -76,7 +85,7 @@ namespace JsonJIT
             public string Name { get; set; }
         }
 
-        static void Main(string[] args)
+        static async Task Main(string[] args)
         {
             TestPoco poco = new TestPoco(){
                 A = "test"
@@ -84,7 +93,7 @@ namespace JsonJIT
 
             Nested<Nested<TestPoco>> obj = new Nested<Nested<TestPoco>>(new Nested<TestPoco>(poco));
 
-            Console.WriteLine(CompileAndSerialize(obj));
+            Console.WriteLine(await CompileAndSerialize(obj));
 
             TestPocoSub pocoSub = new TestPocoSub(){
                 A = "123",
@@ -92,30 +101,39 @@ namespace JsonJIT
                 C = 7,
                 D = new bool[] { false, false, true, false, true, false, true, false },
                 SubA = Math.PI,
-                SubB = new Address() {
+                SubB = new Address()
+                {
                     number = 120,
                     street = "Bremner Blvd."
+                },
+                SubC = new Address()
+                {
+                    number = 200,
+                    street = "University Ave. W"
                 }
             };
 
-            Console.WriteLine(CompileAndSerialize(pocoSub));
+            Console.WriteLine(await CompileAndSerialize(pocoSub));
 
-            Console.WriteLine(CompileAndSerialize((TestPoco)pocoSub));
+            Console.WriteLine(await CompileAndSerialize((TestPoco)pocoSub));
 
-            SimplePoco simplePoco = new SimplePoco() {
+            SimplePoco simplePoco = new SimplePoco()
+            {
                 Name = "Value"
             };
 
-            Console.WriteLine(CompileAndSerialize(simplePoco));
+            Console.WriteLine(await CompileAndSerialize(simplePoco));
         }
 
-        static string CompileAndSerialize<T>(T obj)
+        static async Task<string> CompileAndSerialize<T>(T obj)
         {
-            var serailizer = JsonJitSerializer.Compile<T>(new JsonSerializerOptions() {
+            JsonJitSerializer<T> serializer = JsonJitSerializer.Compile<T>(new JsonSerializerOptions()
+            {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             });
 
-            return serailizer.Serialize(obj);
+            // return serializer.Serialize(obj);
+            return await serializer.SerializeAsync(obj);
         }
     }
 }

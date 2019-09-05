@@ -1,7 +1,6 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -24,7 +23,10 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private static int _compiledCount = -1;
 
+        private static readonly string ResetMethodName = @"Reset";
+
         private static readonly string SerializeMethodName = @"Serialize";
+
         private static readonly string SerializeChunkMethodName = @"SerializeChunk";
 
         public static Type Compile(Type payloadType, JsonSerializerOptions options)
@@ -37,8 +39,10 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             );
 
             JitILCompiler compiler = new JitILCompiler(payloadType, options, tb);
-            compiler.GenerateChunkIL();
-            compiler.GenerateNonChunkIL();
+            // Compile the non chunk routine first since the chunk routine needs to know the number of labels.
+            compiler.GenerateNonChunkMethod();
+            compiler.GenerateChunkMethod();
+            compiler.GenerateResetMethod();
 
             Type compiledSerializerType = tb.CreateType();
 
@@ -49,7 +53,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private Action<Type> _followUp;
 
-        private readonly Type _type;
+        private readonly Type _rootType;
 
         private readonly JsonSerializerOptions _options;
 
@@ -67,18 +71,28 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private readonly Dictionary<JsonConverter, FieldBuilder> _converterCache;
 
+        private Label[] _jumpTable;
+
+        private int _jumpTableCount;
+
+        private FieldBuilder _jumpTableProgressField;
+
         private JitILCompiler(Type type, JsonSerializerOptions options, TypeBuilder tb)
         {
-            _type = type;
+            _rootType = type;
             _options = options;
             _tb = tb;
-            _ilg = null;
             _followUp = null;
             _writeStack = new List<FieldBuilder>();
             _converterCounter = -1;
             _converterCache = new Dictionary<JsonConverter, FieldBuilder>();
-            _generatingChunkMethod = default(bool);
-            
+
+            // Don't care in constructor
+            _ilg = null;
+            _generatingChunkMethod = false;
+            _jumpTable = null;
+            _jumpTableCount = 0;
+
             // Define a static field for JsonSerializerOptions
             string optionsFieldName = @"Options";
             _optionsField = _tb.DefineField(
@@ -91,76 +105,145 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 FieldInfo field = type.GetField(optionsFieldName);
                 field.SetValue(null, options);
             };
+
+            // Define a field for jump table progress
+            _jumpTableProgressField = _tb.DefineField(
+                fieldName: @"_progress",
+                type: typeof(int),
+                attributes: FieldAttributes.Private
+            );
         }
 
-        private void GenerateChunkIL()
+        private void GenerateResetMethod()
+        {
+            MethodBuilder mb = _tb.DefineMethod(
+                name: ResetMethodName,
+                attributes: MethodAttributes.Public | MethodAttributes.Virtual,
+                callingConvention: CallingConventions.Standard,
+                returnType: typeof(void),
+                parameterTypes: new Type[] { }
+            );
+
+            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_rootType).GetMethod(ResetMethodName));
+
+            _ilg = mb.GetILGenerator();
+
+            // _progress = 0;
+            _ilg.Emit(OpCodes.Ldarg_0);
+            _ilg.Emit(OpCodes.Ldc_I4_0);
+            _ilg.Emit(OpCodes.Stfld, _jumpTableProgressField);
+
+            // return false;
+            _ilg.Emit(OpCodes.Ret);
+        }
+
+        private void GenerateChunkMethod()
         {
             _generatingChunkMethod = true;
-            
+
             MethodBuilder mb = _tb.DefineMethod(
                 name: SerializeChunkMethodName,
                 attributes: MethodAttributes.Public | MethodAttributes.Virtual,
                 callingConvention: CallingConventions.Standard,
                 returnType: typeof(bool),
-                parameterTypes: new Type[] { typeof(Utf8JsonWriter), _type }
+                parameterTypes: new Type[] { typeof(Utf8JsonWriter), _rootType }
             );
 
-            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_type).GetMethod(SerializeChunkMethodName));
+            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_rootType).GetMethod(SerializeChunkMethodName));
 
             _ilg = mb.GetILGenerator();
+
+            _jumpTable = new Label[_jumpTableCount];
+            for (int i = 0; i < _jumpTableCount; i++)
+            {
+                _jumpTable[i] = _ilg.DefineLabel();
+            }
+            _jumpTableCount = 0;
 
             // arg0: ObjectSerialier this
             // arg1: Utf8JsonWriter writer
             // arg2: T obj
 
-            // _writeStack0 = obj;
-            FieldInfo writeStackRoot = GetWriteStackFieldAtDepth(0);
+            // Jump to the point of progress
             _ilg.Emit(OpCodes.Ldarg_0);
-            _ilg.Emit(OpCodes.Ldarg_2);
-            _ilg.Emit(OpCodes.Stfld, writeStackRoot);
-            GenerateILForProperty(_type, 0);
+            _ilg.Emit(OpCodes.Ldfld, _jumpTableProgressField);
+            _ilg.Emit(OpCodes.Switch, _jumpTable);
+
+            MarkNewJumpTableLabel();
+
+            JitILCompiler that = this;
+            GenerateILForNestedType(_rootType, 0, () => that._ilg.Emit(OpCodes.Ldarg_2));
 
             // return false;
             _ilg.Emit(OpCodes.Ldc_I4_0);
             _ilg.Emit(OpCodes.Ret);
         }
 
-        private void GenerateNonChunkIL()
+        private void GenerateNonChunkMethod()
         {
             _generatingChunkMethod = false;
-            
+
             MethodBuilder mb = _tb.DefineMethod(
                 name: SerializeMethodName,
                 attributes: MethodAttributes.Public | MethodAttributes.Virtual,
                 callingConvention: CallingConventions.Standard,
                 returnType: typeof(void),
-                parameterTypes: new Type[] { typeof(Utf8JsonWriter), _type }
+                parameterTypes: new Type[] { typeof(Utf8JsonWriter), _rootType }
             );
 
-            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_type).GetMethod(SerializeMethodName));
+            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_rootType).GetMethod(SerializeMethodName));
 
             _ilg = mb.GetILGenerator();
+
+            _jumpTableCount = 0;
 
             // arg0: ObjectSerialier this
             // arg1: Utf8JsonWriter writer
             // arg2: T obj
 
-            // _writeStack0 = obj;
-            FieldInfo writeStackRoot = GetWriteStackFieldAtDepth(0);
-            _ilg.Emit(OpCodes.Ldarg_0);
-            _ilg.Emit(OpCodes.Ldarg_2);
-            _ilg.Emit(OpCodes.Stfld, writeStackRoot);
-            GenerateILForProperty(_type, 0);
+            MarkNewJumpTableLabel();
+
+            JitILCompiler that = this;
+            GenerateILForNestedType(_rootType, 0, () => that._ilg.Emit(OpCodes.Ldarg_2));
 
             // return;
             _ilg.Emit(OpCodes.Ret);
         }
 
-        private void GenerateILForProperty(Type currentType, int depth)
+        private void MarkNewJumpTableLabel()
         {
+            if (_generatingChunkMethod)
+            {
+                if (_jumpTableCount > 0 && _jumpTableCount < _jumpTable.Length - 1)
+                {
+                    // _progress = _jumpTableCount;
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldc_I4, _jumpTableCount);
+                    _ilg.Emit(OpCodes.Stfld, _jumpTableProgressField);
+
+                    // return true;
+                    _ilg.Emit(OpCodes.Ldc_I4_1);
+                    _ilg.Emit(OpCodes.Ret);
+                }
+                _ilg.MarkLabel(_jumpTable[_jumpTableCount]);
+            }
+            _jumpTableCount++;
+        }
+
+        private void GenerateILForNestedType(Type type, int depth, Action pushNestedValueOntoStack)
+        {
+            // _writeStackX = nextElement;
+            _ilg.Emit(OpCodes.Ldarg_0);
+            pushNestedValueOntoStack();
+            if (type.IsValueType)
+            {
+                _ilg.Emit(OpCodes.Box, type);
+            }
+            _ilg.Emit(OpCodes.Stfld, GetWriteStackFieldAtDepth(depth));
+
             Label objIsNull = _ilg.DefineLabel();
-            Label endOfSerailation = _ilg.DefineLabel();
-            if (!currentType.IsValueType)
+            Label endOfSerailizaion = _ilg.DefineLabel();
+            if (!type.IsValueType)
             {
                 // if (obj != null) {
                 _ilg.Emit(OpCodes.Ldarg_0);
@@ -169,19 +252,19 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 _ilg.Emit(OpCodes.Beq, objIsNull);
             }
 
-            if (currentType.GetInterfaces().Any(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>)))
+            if (type.GetInterfaces().Any(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>)))
             {
-                GenerateILForIEnumerable(currentType, depth);
+                GenerateILForIEnumerable(type, depth);
             }
             else
             {
-                GenerateILForObject(currentType, depth);
+                GenerateILForObject(type, depth);
             }
 
-            if (!currentType.IsValueType)
+            if (!type.IsValueType)
             {
                 // } else {
-                _ilg.Emit(OpCodes.Br, endOfSerailation);
+                _ilg.Emit(OpCodes.Br, endOfSerailizaion);
                 _ilg.MarkLabel(objIsNull);
 
                 // writer.WriteNullValue();
@@ -189,17 +272,17 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 _ilg.Emit(OpCodes.Call, _writeNullValue);
 
                 // }
-                _ilg.MarkLabel(endOfSerailation);
+                _ilg.MarkLabel(endOfSerailizaion);
             }
         }
 
-        private void GenerateILForObject(Type currentType, int depth)
+        private void GenerateILForObject(Type type, int depth)
         {
             // writer.WriteStartObject();
             _ilg.Emit(OpCodes.Ldarg_1);
             _ilg.Emit(OpCodes.Call, _writeStartObject);
 
-            foreach (PropertyInfo property in currentType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            foreach (PropertyInfo property in type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
             {
                 // Skip special properties
                 if (property.GetIndexParameters().Length > 0)
@@ -222,17 +305,24 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 );
 
                 JitILCompiler that = this;
-                Action pushPropertyValueOntoStack = () => {
+                Action pushPropertyValueOntoStack = () =>
+                {
                     // obj.Property
                     that._ilg.Emit(OpCodes.Ldarg_0);
                     that._ilg.Emit(OpCodes.Ldfld, that.GetWriteStackFieldAtDepth(depth));
-                    that.GenerateILforCallingGetMethod(getMethod);
+                    if (type.IsValueType)
+                    {
+                        that._ilg.Emit(OpCodes.Unbox, type);
+                    }
+                    that.GenerateILForCallingGetMethod(getMethod);
                 };
 
                 if (converter == null)
                 {
-                    GenerateILForNestedType(property.PropertyType, depth, pushPropertyValueOntoStack);
-                } else {
+                    GenerateILForNestedType(property.PropertyType, depth + 1, pushPropertyValueOntoStack);
+                }
+                else
+                {
                     GenerateILForCallingConverter(property.PropertyType, pushPropertyValueOntoStack, converter);
                 }
             }
@@ -244,7 +334,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private void GenerateILForIEnumerable(Type currentType, int depth)
         {
-            // First agrument: Utf8JsonWriter writer
+            // First argument: Utf8JsonWriter writer
             // Second argument: IEnumerable<T> enumerable
 
             Type elementType = GetIEnumerableGenericType(currentType);
@@ -255,18 +345,19 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Ldarg_1);
             _ilg.Emit(OpCodes.Call, _writeStartArray);
 
-            // IEnumerator<T> it = enumerable.GetEnumerator();
-            LocalBuilder itLocal = _ilg.DeclareLocal(typeof(IEnumerator<>).MakeGenericType(elementType));
+            // _writeStackX = _writeStackX.GetEnumerator();
+            _ilg.Emit(OpCodes.Ldarg_0);
             _ilg.Emit(OpCodes.Ldarg_0);
             _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
             _ilg.Emit(OpCodes.Callvirt, enumerableType.GetMethod("GetEnumerator", new Type[] { }));
-            _ilg.Emit(OpCodes.Stloc, itLocal);
+            _ilg.Emit(OpCodes.Stfld, GetWriteStackFieldAtDepth(depth));
 
-            // while (it.MoveNext()) {
+            // while (_writeStackX.MoveNext()) {
             Label topOfIterationLoop = _ilg.DefineLabel();
             Label bottomOfIterationLoop = _ilg.DefineLabel();
             _ilg.MarkLabel(topOfIterationLoop);
-            _ilg.Emit(OpCodes.Ldloc, itLocal);
+            _ilg.Emit(OpCodes.Ldarg_0);
+            _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
             // MoveNext is defined in IEnumerator
             _ilg.Emit(OpCodes.Callvirt, typeof(IEnumerator).GetMethod("MoveNext", new Type[] { }));
             _ilg.Emit(OpCodes.Brfalse, bottomOfIterationLoop);
@@ -275,17 +366,20 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             JsonConverter converter = _options.GetConverter(elementType);
 
             JitILCompiler that = this;
-            Action pushNextElementOntoStack = () => {
-                // it.Current
-                that._ilg.Emit(OpCodes.Ldloc, itLocal);
+            Action pushNextElementOntoStack = () =>
+            {
+                // _writeStackX.Current
+                that._ilg.Emit(OpCodes.Ldarg_0);
+                that._ilg.Emit(OpCodes.Ldfld, that.GetWriteStackFieldAtDepth(depth));
                 that._ilg.Emit(OpCodes.Callvirt, enumeratorType.GetProperty("Current").GetMethod);
             };
 
             if (converter == null)
             {
-                GenerateILForNestedType(elementType, depth, pushNextElementOntoStack);
+                GenerateILForNestedType(elementType, depth + 1, pushNextElementOntoStack);
             }
-            else {
+            else
+            {
                 GenerateILForCallingConverter(elementType, pushNextElementOntoStack, converter);
             }
 
@@ -298,20 +392,6 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Call, _writeEndArray);
         }
 
-        private void GenerateILForNestedType(Type nestedType, int depth, Action pushNestedValueOntoStack)
-        {
-            // _writeStackX = nextElement;
-            _ilg.Emit(OpCodes.Ldarg_0);
-            if (nestedType.IsValueType)
-            {
-                // TODO: avoid boxing
-                _ilg.Emit(OpCodes.Box);
-            }
-            pushNestedValueOntoStack();
-            _ilg.Emit(OpCodes.Stfld, GetWriteStackFieldAtDepth(depth + 1));
-            GenerateILForProperty(nestedType, depth + 1);
-        }
-
         private void GenerateILForWritingPropertyName(PropertyInfo property)
         {
             JsonNamingPolicy policy = _options.PropertyNamingPolicy;
@@ -320,11 +400,16 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             // writer.WritePropertyName("convertedName");
             _ilg.Emit(OpCodes.Ldarg_1);
-            if (nameAttribute != null) {
+            if (nameAttribute != null)
+            {
                 _ilg.Emit(OpCodes.Ldstr, nameAttribute.Name);
-            } else if (policy == null) {
+            }
+            else if (policy == null)
+            {
                 _ilg.Emit(OpCodes.Ldstr, property.Name);
-            } else {
+            }
+            else
+            {
                 _ilg.Emit(OpCodes.Ldstr, policy.ConvertName(property.Name));
             }
 
@@ -346,7 +431,8 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             // Save converter to a global variable
             FieldBuilder converterField;
-            if (!_converterCache.TryGetValue(converter, out converterField)) {
+            if (!_converterCache.TryGetValue(converter, out converterField))
+            {
                 string fieldName = @"Converter" + (++_converterCounter);
                 converterField = _tb.DefineField(
                     fieldName: fieldName,
@@ -357,7 +443,8 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
                 _converterCache.Add(converter, converterField);
 
-                _followUp += type => {
+                _followUp += type =>
+                {
                     FieldInfo field = type.GetField(fieldName);
                     field.SetValue(null, converter);
                 };
@@ -373,9 +460,11 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 converterGenericTypeParameter,
                 typeof(JsonSerializerOptions)
             }));
+
+            MarkNewJumpTableLabel();
         }
 
-        private void GenerateILforCallingGetMethod(MethodInfo getMethod)
+        private void GenerateILForCallingGetMethod(MethodInfo getMethod)
         {
             if (!getMethod.IsVirtual || getMethod.IsFinal)
             {
@@ -389,7 +478,8 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private FieldBuilder GetWriteStackFieldAtDepth(int depth)
         {
-            while (_writeStack.Count <= depth) {
+            while (_writeStack.Count <= depth)
+            {
                 _writeStack.Add(_tb.DefineField(
                     fieldName: "_writeStack" + depth,
                     type: typeof(Object), // Used as void*

@@ -55,7 +55,9 @@ namespace MartinCl2.Text.Json.Serialization
             using (Utf8JsonWriter writer = new Utf8JsonWriter(output))
             {
                 TSerializer jitSerializer = default(TSerializer); // TSerializer should be a struct
-                while (jitSerializer.SerializeChunk(writer, value)) {
+                jitSerializer.Reset();
+                while (jitSerializer.SerializeChunk(writer, value))
+                {
                     await writer.FlushAsync();
                 }
                 await writer.FlushAsync();
