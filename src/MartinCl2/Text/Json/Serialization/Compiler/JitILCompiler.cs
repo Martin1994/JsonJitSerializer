@@ -12,6 +12,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 {
     public struct JitILCompiler
     {
+        internal static readonly JsonSerializerOptions DefaultSerializerOptions = new JsonSerializerOptions();
 
         private static readonly MethodInfo _writePropertyNameWithJsonEncodedText = typeof(Utf8JsonWriter).GetMethod("WritePropertyName", new Type[] { typeof(JsonEncodedText) });
         private static readonly MethodInfo _writePropertyNameWithString = typeof(Utf8JsonWriter).GetMethod("WritePropertyName", new Type[] { typeof(string) });
@@ -31,6 +32,11 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         public static Type Compile(Type payloadType, JsonSerializerOptions options)
         {
+            if (options == null)
+            {
+                options = DefaultSerializerOptions;
+            }
+
             TypeBuilder tb = JitAssembly.JitModuleBuilder.DefineType(
                 name: JitAssembly.GeneratedModuleNamespace + @".ObjectSerialier" + Interlocked.Increment(ref _compiledCount),
                 attr: TypeAttributes.Public | TypeAttributes.Sealed,

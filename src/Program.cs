@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
@@ -98,7 +100,7 @@ namespace JsonJIT
 
             Nested<Nested<TestPoco>> obj = new Nested<Nested<TestPoco>>(new Nested<TestPoco>(poco));
 
-            Console.WriteLine(await CompileAndSerialize(obj));
+            Console.WriteLine(await CompileAndSerializeAsync(obj));
 
             TestPocoSub pocoSub = new TestPocoSub(){
                 A = "123",
@@ -122,16 +124,16 @@ namespace JsonJIT
                 }
             };
 
-            Console.WriteLine(await CompileAndSerialize(pocoSub));
+            Console.WriteLine(await CompileAndSerializeAsync(pocoSub));
 
-            Console.WriteLine(await CompileAndSerialize((TestPoco)pocoSub));
+            Console.WriteLine(await CompileAndSerializeAsync((TestPoco)pocoSub));
 
             SimplePoco simplePoco = new SimplePoco()
             {
                 Name = "Value"
             };
 
-            Console.WriteLine(await CompileAndSerialize(simplePoco));
+            Console.WriteLine(await CompileAndSerializeAsync(simplePoco));
 
             Dictionary<string, int> dict = new Dictionary<string, int>()
             {
@@ -139,18 +141,23 @@ namespace JsonJIT
                 { "b", 2 }
             };
 
-            Console.WriteLine(await CompileAndSerialize(dict));
+            Console.WriteLine(await CompileAndSerializeAsync(dict));
         }
 
-        static async Task<string> CompileAndSerialize<T>(T obj)
+        static async Task<string> CompileAndSerializeAsync<T>(T obj)
         {
-            JsonJitSerializer<T> serializer = JsonJitSerializer.Compile<T>(new JsonSerializerOptions()
+            JsonJitSerializer<T> serializer = JsonJitSerializer<T>.Compile(new JsonSerializerOptions()
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase
             });
 
-            // return serializer.Serialize(obj);
-            return await serializer.SerializeAsync(obj);
+            MemoryStream stream = new MemoryStream();
+            using (Utf8JsonWriter writer = new Utf8JsonWriter(stream))
+            {
+                // serializer.Serialize(writer, obj);
+                await serializer.SerializeAsync(writer, obj);
+            }
+            return Encoding.UTF8.GetString(stream.ToArray());
         }
     }
 }

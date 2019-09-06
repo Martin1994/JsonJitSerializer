@@ -11,14 +11,27 @@ Modify `Program.cs`.
 # Example usage
 
 ```C#
-static async Task<string> CompileAndSerialize<T>(T obj)
+static string CompileAndSerialize<T>(T obj)
 {
-    JsonJitSerializer<T> serializer = JsonJitSerializer.Compile<T>(new JsonSerializerOptions()
+    JsonJitSerializer<T> serializer = JsonJitSerializer<T>.Compile(new JsonSerializerOptions()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     });
 
-    return await serializer.SerializeAsync(obj);
+    return serializer.Serialize(obj);
+}
+
+static async Task CompileAndSerializeAsync<T>(Stream stream, T obj)
+{
+    JsonJitSerializer<T> serializer = JsonJitSerializer<T>.Compile(new JsonSerializerOptions()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    });
+
+    using (Utf8JsonWriter writer = new Utf8JsonWriter(stream))
+    {
+        await serializer.SerializeAsync(writer, obj);
+    }
 }
 ```
 
