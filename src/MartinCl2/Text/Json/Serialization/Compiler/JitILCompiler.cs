@@ -13,7 +13,8 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
     public struct JitILCompiler
     {
 
-        private static readonly MethodInfo _writePropertyName = typeof(Utf8JsonWriter).GetMethod("WritePropertyName", new Type[] { typeof(JsonEncodedText) });
+        private static readonly MethodInfo _writePropertyNameWithJsonEncodedText = typeof(Utf8JsonWriter).GetMethod("WritePropertyName", new Type[] { typeof(JsonEncodedText) });
+        private static readonly MethodInfo _writePropertyNameWithString = typeof(Utf8JsonWriter).GetMethod("WritePropertyName", new Type[] { typeof(string) });
         private static readonly MethodInfo _writeStartObject = typeof(Utf8JsonWriter).GetMethod("WriteStartObject", new Type[] { });
         private static readonly MethodInfo _writeEndObject = typeof(Utf8JsonWriter).GetMethod("WriteEndObject", new Type[] { });
         private static readonly MethodInfo _writeStartArray = typeof(Utf8JsonWriter).GetMethod("WriteStartArray", new Type[] { });
@@ -258,11 +259,23 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 // if (obj != null) {
                 _ilg.Emit(OpCodes.Ldarg_0);
                 _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
-                _ilg.Emit(OpCodes.Ldnull);
-                _ilg.Emit(OpCodes.Beq, objIsNull);
+                _ilg.Emit(OpCodes.Brfalse, objIsNull);
             }
 
-            if (type.GetInterfaces().Any(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>)))
+            // IDictionary<string, T> also implements IEnumerable<KeyValuePair<string, T>>,
+            // so it has to be checked before IEnumerable<T>
+            if (type.GetInterfaces().Any(type =>
+                type.IsGenericType &&
+                type.GetGenericTypeDefinition() == typeof(IDictionary<,>) &&
+                type.GetGenericArguments()[0] == typeof(string)
+            ))
+            {
+                GenerateILForIDictionary(type, depth);
+            }
+            else if (type.GetInterfaces().Any(type =>
+                type.IsGenericType &&
+                type.GetGenericTypeDefinition() == typeof(IEnumerable<>)
+            ))
             {
                 GenerateILForIEnumerable(type, depth);
             }
@@ -342,12 +355,12 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Call, _writeEndObject);
         }
 
-        private void GenerateILForIEnumerable(Type currentType, int depth)
+        private void GenerateILForIEnumerable(Type type, int depth)
         {
             // First argument: Utf8JsonWriter writer
             // Second argument: IEnumerable<T> enumerable
 
-            Type elementType = GetIEnumerableGenericType(currentType);
+            Type elementType = GetIEnumerableGenericType(type);
             Type enumerableType = typeof(IEnumerable<>).MakeGenericType(elementType);
             Type enumeratorType = typeof(IEnumerator<>).MakeGenericType(elementType);
 
@@ -372,7 +385,6 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Callvirt, typeof(IEnumerator).GetMethod("MoveNext", new Type[] { }));
             _ilg.Emit(OpCodes.Brfalse, bottomOfIterationLoop);
 
-            // Save converter to a global variable
             JsonConverter converter = _options.GetConverter(elementType);
 
             JitILCompiler that = this;
@@ -402,6 +414,78 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Call, _writeEndArray);
         }
 
+        private void GenerateILForIDictionary(Type type, int depth)
+        {
+            // First argument: Utf8JsonWriter writer
+            // Second argument: IDictionary<string, T> dictionary
+
+            Type valueType = GetIDictionaryValueGenericType(type);
+            Type keyValuePairType = typeof(KeyValuePair<,>).MakeGenericType(typeof(string), valueType);
+            Type enumerableType = typeof(IEnumerable<>).MakeGenericType(keyValuePairType);
+            Type enumeratorType = typeof(IEnumerator<>).MakeGenericType(keyValuePairType);
+
+            // writer.WriteStartObject();
+            _ilg.Emit(OpCodes.Ldarg_1);
+            _ilg.Emit(OpCodes.Call, _writeStartObject);
+
+            // _writeStackX = _writeStackX.GetEnumerator();
+            _ilg.Emit(OpCodes.Ldarg_0);
+            _ilg.Emit(OpCodes.Ldarg_0);
+            _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
+            _ilg.Emit(OpCodes.Callvirt, enumerableType.GetMethod("GetEnumerator", new Type[] { }));
+            _ilg.Emit(OpCodes.Stfld, GetWriteStackFieldAtDepth(depth));
+
+            // while (_writeStackX.MoveNext()) {
+            Label topOfIterationLoop = _ilg.DefineLabel();
+            Label bottomOfIterationLoop = _ilg.DefineLabel();
+            _ilg.MarkLabel(topOfIterationLoop);
+            _ilg.Emit(OpCodes.Ldarg_0);
+            _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
+            // MoveNext is defined in IEnumerator
+            _ilg.Emit(OpCodes.Callvirt, typeof(IEnumerator).GetMethod("MoveNext", new Type[] { }));
+            _ilg.Emit(OpCodes.Brfalse, bottomOfIterationLoop);
+
+            // KeyValuePair<string, T> kvp = _writeStackX.Current;
+            LocalBuilder kvpLocal = _ilg.DeclareLocal(keyValuePairType);
+            _ilg.Emit(OpCodes.Ldarg_0);
+            _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
+            _ilg.Emit(OpCodes.Callvirt, enumeratorType.GetProperty("Current").GetMethod);
+            _ilg.Emit(OpCodes.Stloc, kvpLocal);
+
+            // writer.WritePropertyName(kvp.Key)
+            _ilg.Emit(OpCodes.Ldarg_1);
+            _ilg.Emit(OpCodes.Ldloca, kvpLocal);
+            _ilg.Emit(OpCodes.Call, keyValuePairType.GetProperty("Key").GetMethod);
+            _ilg.Emit(OpCodes.Call, _writePropertyNameWithString);
+
+            JsonConverter converter = _options.GetConverter(valueType);
+
+            JitILCompiler that = this;
+            Action pushNextElementOntoStack = () =>
+            {
+                // kvp.Value
+                that._ilg.Emit(OpCodes.Ldloca, kvpLocal);
+                that._ilg.Emit(OpCodes.Call, keyValuePairType.GetProperty("Value").GetMethod);
+            };
+
+            if (converter == null)
+            {
+                GenerateILForNestedType(valueType, depth + 1, pushNextElementOntoStack);
+            }
+            else
+            {
+                GenerateILForCallingConverter(valueType, pushNextElementOntoStack, converter);
+            }
+
+            // }
+            _ilg.Emit(OpCodes.Br, topOfIterationLoop);
+            _ilg.MarkLabel(bottomOfIterationLoop);
+
+            // writer.WriteEndObject();
+            _ilg.Emit(OpCodes.Ldarg_1);
+            _ilg.Emit(OpCodes.Call, _writeEndObject);
+        }
+
         private void GenerateILForWritingPropertyName(PropertyInfo property)
         {
             JsonNamingPolicy policy = _options.PropertyNamingPolicy;
@@ -427,7 +511,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             FieldBuilder propertyNameField;
             if (!_propertyNameCache.TryGetValue(convertedName, out propertyNameField))
             {
-                string fieldName = @"PropertyName" + (++_converterCounter);
+                string fieldName = @"PropertyName" + (++_propertyNameCounter);
                 propertyNameField = _tb.DefineField(
                     fieldName: fieldName,
                     // Default converters are internal classes so here the abstract generic type must be used.
@@ -445,7 +529,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             }
 
             _ilg.Emit(OpCodes.Ldsfld, propertyNameField);
-            _ilg.Emit(OpCodes.Call, _writePropertyName);
+            _ilg.Emit(OpCodes.Call, _writePropertyNameWithJsonEncodedText);
         }
 
         private void GenerateILForCallingConverter(Type valueType, Action pushValueOntoStack, JsonConverter converter)
@@ -539,6 +623,14 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 .GetInterfaces()
                 .First(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>))
                 ?.GetGenericArguments()[0];
+        }
+
+        private static Type GetIDictionaryValueGenericType(Type idictionaryType)
+        {
+            return idictionaryType
+                .GetInterfaces()
+                .First(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IDictionary<,>))
+                ?.GetGenericArguments()[1];
         }
 
         // ========== Modified from CoreFX ==========

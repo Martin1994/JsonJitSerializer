@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
@@ -131,6 +132,14 @@ namespace JsonJIT
             };
 
             Console.WriteLine(await CompileAndSerialize(simplePoco));
+
+            Dictionary<string, int> dict = new Dictionary<string, int>()
+            {
+                { "a", 1 },
+                { "b", 2 }
+            };
+
+            Console.WriteLine(await CompileAndSerialize(dict));
         }
 
         static async Task<string> CompileAndSerialize<T>(T obj)
