@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace MartinCl2.Text.Json.Serialization
 {
-    public interface IObjectSerialier<T>
+    public interface ISerialierImplementation<T>
     {
         void Reset();
 

@@ -76,6 +76,10 @@ namespace JsonJIT
             public Address SubC { get => _subC; set => _subC = value; } // Test struct
             public ref Address RefSubC { get => ref _subC; } // Test ref struct
 
+            private SimplePoco _subD;
+            public ref SimplePoco RefSubD { get => ref _subD; } // Test ref class
+            public SimplePoco SubD { set => _subD = value; } // Test ref class, Test no getter
+
             [JsonPropertyName("overridden-name")] // Test custom name
             public override string Name { get => "TestPocoSub"; } // Test virtual call
         }
@@ -110,6 +114,10 @@ namespace JsonJIT
                 {
                     number = 200,
                     street = "University Ave. W"
+                },
+                SubD = new SimplePoco()
+                {
+                    Name = "SubD"
                 }
             };
 

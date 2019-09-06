@@ -36,7 +36,7 @@ namespace MartinCl2.Text.Json.Serialization
     }
 
     public sealed class JsonJitSerializer<TValue, TSerializer> : JsonJitSerializer<TValue> 
-        where TSerializer : IObjectSerialier<TValue>
+        where TSerializer : ISerialierImplementation<TValue>
     {
         public override string Serialize(TValue value)
         {

@@ -35,7 +35,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 name: JitAssembly.GeneratedModuleNamespace + @".ObjectSerialier" + Interlocked.Increment(ref _compiledCount),
                 attr: TypeAttributes.Public | TypeAttributes.Sealed,
                 parent: typeof(ValueType),
-                interfaces: new Type[] { typeof(IObjectSerialier<>).MakeGenericType(payloadType) }
+                interfaces: new Type[] { typeof(ISerialierImplementation<>).MakeGenericType(payloadType) }
             );
 
             JitILCompiler compiler = new JitILCompiler(payloadType, options, tb);
@@ -124,7 +124,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 parameterTypes: new Type[] { }
             );
 
-            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_rootType).GetMethod(ResetMethodName));
+            _tb.DefineMethodOverride(mb, typeof(ISerialierImplementation<>).MakeGenericType(_rootType).GetMethod(ResetMethodName));
 
             _ilg = mb.GetILGenerator();
 
@@ -149,7 +149,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 parameterTypes: new Type[] { typeof(Utf8JsonWriter), _rootType }
             );
 
-            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_rootType).GetMethod(SerializeChunkMethodName));
+            _tb.DefineMethodOverride(mb, typeof(ISerialierImplementation<>).MakeGenericType(_rootType).GetMethod(SerializeChunkMethodName));
 
             _ilg = mb.GetILGenerator();
 
@@ -191,7 +191,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 parameterTypes: new Type[] { typeof(Utf8JsonWriter), _rootType }
             );
 
-            _tb.DefineMethodOverride(mb, typeof(IObjectSerialier<>).MakeGenericType(_rootType).GetMethod(SerializeMethodName));
+            _tb.DefineMethodOverride(mb, typeof(ISerialierImplementation<>).MakeGenericType(_rootType).GetMethod(SerializeMethodName));
 
             _ilg = mb.GetILGenerator();
 
@@ -235,6 +235,11 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             // _writeStackX = nextElement;
             _ilg.Emit(OpCodes.Ldarg_0);
             pushNestedValueOntoStack();
+            if (type.IsByRef)
+            {
+                _ilg.Emit(OpCodes.Ldind_Ref);
+                type = type.GetElementType();
+            }
             if (type.IsValueType)
             {
                 _ilg.Emit(OpCodes.Box, type);
