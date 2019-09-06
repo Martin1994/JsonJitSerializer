@@ -45,6 +45,5 @@ The dynamic class contains a list of `Object` fields used as serialization stack
 * Benchmark.
 * Unit tests.
 * Optionally skip null. _(Looks like [the official implementation always skips null](https://github.com/dotnet/corefx/issues/38492). However the current implementation of this library always keep null)_
-* Pre-cached UTF-8 property name.
 * Avoid boxing for struct?
 * Pointer getter?

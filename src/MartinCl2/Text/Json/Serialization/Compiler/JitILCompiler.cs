@@ -13,8 +13,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
     public struct JitILCompiler
     {
 
-        private static readonly MethodInfo _writePropertyName = typeof(Utf8JsonWriter).GetMethod("WritePropertyName", new Type[] { typeof(string) });
-        private static readonly MethodInfo _writeStringValue = typeof(Utf8JsonWriter).GetMethod("WriteStringValue", new Type[] { typeof(string) });
+        private static readonly MethodInfo _writePropertyName = typeof(Utf8JsonWriter).GetMethod("WritePropertyName", new Type[] { typeof(JsonEncodedText) });
         private static readonly MethodInfo _writeStartObject = typeof(Utf8JsonWriter).GetMethod("WriteStartObject", new Type[] { });
         private static readonly MethodInfo _writeEndObject = typeof(Utf8JsonWriter).GetMethod("WriteEndObject", new Type[] { });
         private static readonly MethodInfo _writeStartArray = typeof(Utf8JsonWriter).GetMethod("WriteStartArray", new Type[] { });
@@ -71,6 +70,10 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private readonly Dictionary<JsonConverter, FieldBuilder> _converterCache;
 
+        private int _propertyNameCounter;
+
+        private readonly Dictionary<string, FieldBuilder> _propertyNameCache;
+
         private Label[] _jumpTable;
 
         private int _jumpTableCount;
@@ -86,6 +89,8 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _writeStack = new List<FieldBuilder>();
             _converterCounter = -1;
             _converterCache = new Dictionary<JsonConverter, FieldBuilder>();
+            _propertyNameCounter = -1;
+            _propertyNameCache = new Dictionary<string, FieldBuilder>();
 
             // Don't care in constructor
             _ilg = null;
@@ -405,19 +410,41 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             // writer.WritePropertyName("convertedName");
             _ilg.Emit(OpCodes.Ldarg_1);
+            string convertedName;
             if (nameAttribute != null)
             {
-                _ilg.Emit(OpCodes.Ldstr, nameAttribute.Name);
+                convertedName = nameAttribute.Name;
             }
             else if (policy == null)
             {
-                _ilg.Emit(OpCodes.Ldstr, property.Name);
+                convertedName = property.Name;
             }
             else
             {
-                _ilg.Emit(OpCodes.Ldstr, policy.ConvertName(property.Name));
+                convertedName = policy.ConvertName(property.Name);
             }
 
+            FieldBuilder propertyNameField;
+            if (!_propertyNameCache.TryGetValue(convertedName, out propertyNameField))
+            {
+                string fieldName = @"PropertyName" + (++_converterCounter);
+                propertyNameField = _tb.DefineField(
+                    fieldName: fieldName,
+                    // Default converters are internal classes so here the abstract generic type must be used.
+                    type: typeof(JsonEncodedText),
+                    attributes: FieldAttributes.Public | FieldAttributes.Static
+                );
+
+                _propertyNameCache.Add(convertedName, propertyNameField);
+
+                _followUp += type =>
+                {
+                    FieldInfo field = type.GetField(fieldName);
+                    field.SetValue(null, JsonEncodedText.Encode(convertedName));
+                };
+            }
+
+            _ilg.Emit(OpCodes.Ldsfld, propertyNameField);
             _ilg.Emit(OpCodes.Call, _writePropertyName);
         }
 
