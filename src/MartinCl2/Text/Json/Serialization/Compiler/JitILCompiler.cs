@@ -180,7 +180,10 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 parameterTypes: new Type[] { typeof(Utf8JsonWriter), _rootType }
             );
 
-            _tb.DefineMethodOverride(mb, typeof(ISerialierImplementation<>).MakeGenericType(_rootType).GetMethod(SerializeChunkMethodName));
+            _tb.DefineMethodOverride(mb, typeof(ISerialierImplementation<>).MakeGenericType(_rootType).GetMethod(
+                name: SerializeChunkMethodName,
+                types: new Type[] { typeof(Utf8JsonWriter), _rootType }
+            ));
 
             _ilg = mb.GetILGenerator();
 
@@ -222,7 +225,10 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 parameterTypes: new Type[] { typeof(Utf8JsonWriter), _rootType }
             );
 
-            _tb.DefineMethodOverride(mb, typeof(ISerialierImplementation<>).MakeGenericType(_rootType).GetMethod(SerializeMethodName));
+            _tb.DefineMethodOverride(mb, typeof(ISerialierImplementation<>).MakeGenericType(_rootType).GetMethod(
+                name: SerializeMethodName,
+                types: new Type[] { typeof(Utf8JsonWriter), _rootType }
+            ));
 
             _ilg = mb.GetILGenerator();
 
@@ -266,11 +272,6 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             // _writeStackX = nextElement;
             _ilg.Emit(OpCodes.Ldarg_0);
             pushNestedValueOntoStack();
-            if (type.IsByRef)
-            {
-                _ilg.Emit(OpCodes.Ldind_Ref);
-                type = type.GetElementType();
-            }
             if (type.IsValueType)
             {
                 _ilg.Emit(OpCodes.Box, type);
@@ -326,6 +327,8 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private void GenerateILForObject(Type type, int depth)
         {
+            CheckTypeAccessibility(type);
+
             // writer.WriteStartObject();
             _ilg.Emit(OpCodes.Ldarg_1);
             _ilg.Emit(OpCodes.Call, _writeStartObject);
@@ -344,14 +347,11 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                     continue;
                 }
 
-                GenerateILForWritingPropertyName(property);
-
-                JsonConverter converter = DetermineConverterForProperty(
-                    options: _options,
-                    runtimePropertyType: property.PropertyType,
-                    propertyInfo: property
-                );
-
+                Type propertyTypeWithoutReference = property.PropertyType;
+                if (property.PropertyType.IsByRef)
+                {
+                    propertyTypeWithoutReference = propertyTypeWithoutReference.GetElementType();
+                }
                 JitILCompiler that = this;
                 Action pushPropertyValueOntoStack = () =>
                 {
@@ -363,16 +363,41 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                         that._ilg.Emit(OpCodes.Unbox, type);
                     }
                     that.GenerateILForCallingGetMethod(getMethod);
+                    if (property.PropertyType.IsByRef)
+                    {
+                        that._ilg.Emit(OpCodes.Ldind_Ref);
+                    }
                 };
+
+                // Check null at runtime
+                Label endOfSerailizaionForThisProperty = _ilg.DefineLabel();
+                bool skipNull = false;
+                if (!propertyTypeWithoutReference.IsValueType && skipNull)
+                {
+                    // if (obj.Property != null) {
+                    pushPropertyValueOntoStack();
+                    _ilg.Emit(OpCodes.Brfalse, endOfSerailizaionForThisProperty);
+                }
+
+                GenerateILForWritingPropertyName(property);
+
+                JsonConverter converter = DetermineConverterForProperty(
+                    options: _options,
+                    runtimePropertyType: propertyTypeWithoutReference,
+                    propertyInfo: property
+                );
 
                 if (converter == null)
                 {
-                    GenerateILForNestedType(property.PropertyType, depth + 1, pushPropertyValueOntoStack);
+                    GenerateILForNestedType(propertyTypeWithoutReference, depth + 1, pushPropertyValueOntoStack);
                 }
                 else
                 {
-                    GenerateILForCallingConverter(property.PropertyType, pushPropertyValueOntoStack, converter);
+                    GenerateILForCallingConverter(propertyTypeWithoutReference, pushPropertyValueOntoStack, converter);
                 }
+
+                // }
+                _ilg.MarkLabel(endOfSerailizaionForThisProperty);
             }
 
             // writer.WriteEndObject();
@@ -665,6 +690,14 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 .GetInterfaces()
                 .First(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IDictionary<,>))
                 ?.GetGenericArguments()[1];
+        }
+
+        private static void CheckTypeAccessibility(Type type)
+        {
+            if (!type.IsVisible)
+            {
+                throw new TypeAccessException(String.Format("{0} is not visible.", type.FullName));
+            }
         }
 
         // ========== Modified from CoreFX ==========

@@ -57,6 +57,7 @@ The dynamic class contains a list of `Object` fields used as serialization stack
 * Support element converter for `IEnumerable<T>` and `IDictionary<string, T>`. _(Not supported in the official `JsonSerializer` yet)_
 * Benchmark.
 * Unit tests.
-* Optionally skip null. _(Looks like [the official implementation always skips null](https://github.com/dotnet/corefx/issues/38492). However the current implementation of this library always keep null)_
+* Optionally skip null. _(Looks like [the official implementation always keeps null](https://github.com/dotnet/corefx/issues/38492).)_
 * Avoid boxing for struct?
+* Pointer type serialization?
 * Pointer getter?
