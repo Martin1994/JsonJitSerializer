@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -65,6 +66,10 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private readonly FieldBuilder _optionsField;
 
+        private readonly JsonNamingPolicy _dictionaryKeyPolicy;
+
+        private readonly FieldBuilder _dictionaryKeyPolicyField;
+
         private ILGenerator _ilg;
 
         private bool _generatingChunkMethod;
@@ -91,6 +96,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
         {
             _rootType = type;
             _options = options;
+            _dictionaryKeyPolicy = options.DictionaryKeyPolicy;
             _tb = tb;
             _followUp = null;
             _writeStack = new List<FieldBuilder>();
@@ -116,6 +122,19 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             {
                 FieldInfo field = type.GetField(optionsFieldName);
                 field.SetValue(null, options);
+            };
+
+            // Define a static field for DictionaryKeyPolicy
+            string dictionaryKeyPolicyFieldName = @"DictionaryKeyPolicy";
+            _dictionaryKeyPolicyField = _tb.DefineField(
+                fieldName: dictionaryKeyPolicyFieldName,
+                type: typeof(JsonNamingPolicy),
+                attributes: FieldAttributes.Public | FieldAttributes.Static
+            );
+            _followUp += type =>
+            {
+                FieldInfo field = type.GetField(dictionaryKeyPolicyFieldName);
+                field.SetValue(null, options.DictionaryKeyPolicy);
             };
 
             // Define a field for jump table progress
@@ -458,10 +477,18 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Callvirt, enumeratorType.GetProperty("Current").GetMethod);
             _ilg.Emit(OpCodes.Stloc, kvpLocal);
 
-            // writer.WritePropertyName(kvp.Key)
+            // writer.WritePropertyName(DictionaryKeyPolicyField.ConvertName(Namekvp.Key))
             _ilg.Emit(OpCodes.Ldarg_1);
+            if (_dictionaryKeyPolicy != null)
+            {
+                _ilg.Emit(OpCodes.Ldsfld, _dictionaryKeyPolicyField);
+            }
             _ilg.Emit(OpCodes.Ldloca, kvpLocal);
             _ilg.Emit(OpCodes.Call, keyValuePairType.GetProperty("Key").GetMethod);
+            if (_dictionaryKeyPolicy != null)
+            {
+                _ilg.Emit(OpCodes.Callvirt, typeof(JsonNamingPolicy).GetMethod("ConvertName", new Type[] { typeof(string) }));
+            }
             _ilg.Emit(OpCodes.Call, _writePropertyNameWithString);
 
             JsonConverter converter = _options.GetConverter(valueType);
@@ -527,10 +554,11 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
                 _propertyNameCache.Add(convertedName, propertyNameField);
 
+                JavaScriptEncoder encoder = _options.Encoder;
                 _followUp += type =>
                 {
                     FieldInfo field = type.GetField(fieldName);
-                    field.SetValue(null, JsonEncodedText.Encode(convertedName));
+                    field.SetValue(null, JsonEncodedText.Encode(convertedName, encoder));
                 };
             }
 
