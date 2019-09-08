@@ -1,11 +1,6 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace MartinCl2.Text.Json.Serialization.Compiler
 {

@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -15,7 +16,20 @@ namespace MartinCl2.Text.Json.Serialization
             return (JsonJitSerializer<T>)Activator.CreateInstance(typeof(JsonJitSerializer<,>).MakeGenericType(typeof(T), jitSerializerType));
         }
 
-        public abstract string Serialize(T value);
+        public string Serialize(T value) => Encoding.UTF8.GetString(SerializeToUtf8BytesSpan(value));
+
+        public byte[] SerializeToUtf8Bytes(T value) => SerializeToUtf8BytesSpan(value).ToArray();
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private ReadOnlySpan<byte> SerializeToUtf8BytesSpan(T value)
+        {
+            ArrayBufferWriter<byte> output = new ArrayBufferWriter<byte>();
+            using (Utf8JsonWriter writer = new Utf8JsonWriter(output))
+            {
+                Serialize(writer, value);
+            }
+            return output.WrittenSpan;
+        }
 
         public abstract void Serialize(Utf8JsonWriter writer, T value);
 
@@ -26,17 +40,6 @@ namespace MartinCl2.Text.Json.Serialization
     public sealed class JsonJitSerializer<TValue, TSerializerImplementation> : JsonJitSerializer<TValue>
         where TSerializerImplementation : struct, ISerialierImplementation<TValue>
     {
-        public override string Serialize(TValue value)
-        {
-            ArrayBufferWriter<byte> output = new ArrayBufferWriter<byte>();
-            using (Utf8JsonWriter writer = new Utf8JsonWriter(output))
-            {
-                TSerializerImplementation implementation = default(TSerializerImplementation); // Default struct constructor
-                implementation.Serialize(writer, value);
-            }
-            return Encoding.UTF8.GetString(output.WrittenSpan);
-        }
-
         public override void Serialize(Utf8JsonWriter writer, TValue value)
         {
             TSerializerImplementation implementation = default(TSerializerImplementation); // Default struct constructor
@@ -47,7 +50,6 @@ namespace MartinCl2.Text.Json.Serialization
         public override async Task SerializeAsync(Utf8JsonWriter writer, TValue value)
         {
             TSerializerImplementation implementation = default(TSerializerImplementation); // Default struct constructor
-            implementation.Reset();
             while (implementation.SerializeChunk(writer, value))
             {
                 await writer.FlushAsync();
