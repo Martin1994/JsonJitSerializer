@@ -435,7 +435,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _ilg.Emit(OpCodes.Callvirt, typeof(IEnumerator).GetMethod("MoveNext", new Type[] { }));
             _ilg.Emit(OpCodes.Brfalse, bottomOfIterationLoop);
 
-            JsonConverter converter = _options.GetConverter(elementType);
+            JsonConverter converter = GetConverterFromOptions(_options, elementType);
 
             JitILCompiler that = this;
             Action pushNextElementOntoStack = () =>
@@ -516,7 +516,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             }
             _ilg.Emit(OpCodes.Call, _writePropertyNameWithString);
 
-            JsonConverter converter = _options.GetConverter(valueType);
+            JsonConverter converter = GetConverterFromOptions(_options, valueType);
 
             JitILCompiler that = this;
             Action pushNextElementOntoStack = () =>
@@ -700,6 +700,20 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             }
         }
 
+        private static JsonConverter GetConverterFromOptions(JsonSerializerOptions options, Type type)
+        {
+            // Skip System.Object. This is a special case in System.Test.Json
+            // https://github.com/dotnet/corefx/blob/6005a1ed7772772e211a962141cb17dfc4e26539/src/System.Text.Json/src/System/Text/Json/Serialization/JsonClassInfo.cs#L460-L463
+            if (type == typeof(Object))
+            {
+                return null;
+            }
+            else
+            {
+                return options.GetConverter(type);
+            }
+        }
+
         // ========== Modified from CoreFX ==========
         // Licensed to the .NET Foundation under one or more agreements.
         // The .NET Foundation licenses this file to you under the MIT license.
@@ -721,7 +735,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             if (converter == null)
             {
-                converter = options.GetConverter(runtimePropertyType);
+                converter = GetConverterFromOptions(options, runtimePropertyType);
             }
 
             if (converter is JsonConverterFactory factory)
