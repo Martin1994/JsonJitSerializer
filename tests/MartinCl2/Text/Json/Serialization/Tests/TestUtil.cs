@@ -29,12 +29,11 @@ namespace MartinCl2.Text.Json.Serialization.Tests
 
         public static async Task<string> SerializeAsync<T>(this JsonJitSerializer<T> serializer, T obj)
         {
-            MemoryStream stream = new MemoryStream();
-            using (Utf8JsonWriter writer = new Utf8JsonWriter(stream))
+            using (MemoryStream stream = new MemoryStream())
             {
-                await serializer.SerializeAsync(writer, obj);
+                await serializer.SerializeAsync(stream, obj);
+                return Encoding.UTF8.GetString(stream.ToArray());
             }
-            return Encoding.UTF8.GetString(stream.ToArray());
         }
     }
 }

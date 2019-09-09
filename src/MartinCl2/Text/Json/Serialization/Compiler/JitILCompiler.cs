@@ -31,7 +31,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private static readonly string SerializeChunkMethodName = @"SerializeChunk";
 
-        public static Type Compile(Type payloadType, JsonSerializerOptions options)
+        public static Type Compile(Type payloadType, ref JsonSerializerOptions options)
         {
             if (options == null)
             {
