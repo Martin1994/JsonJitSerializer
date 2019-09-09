@@ -4,10 +4,6 @@ __Note: This package is currently only for experiment purpose. APIs may be chang
 
 Emit CIL (MSIL) code at runtime for serializing JSON object, utilizing the `System.Test.Json` namespace provided since .NET Core 3.0.
 
-# How to play with it
-
-Modify `Program.cs`.
-
 # Example usage
 
 ```C#
@@ -61,3 +57,7 @@ The dynamic class contains a list of `Object` fields used as serialization stack
 * Avoid boxing for struct?
 * Pointer type serialization?
 * Pointer getter?
+
+# How to: Run unit tests and generate code coverage
+
+`dotnet test ./tests/JsonJitSerializerTests.csproj /p:CollectCoverage=true /p:CoverletOutputFormat="lcov" /p:CoverletOutput=../coverage/`
