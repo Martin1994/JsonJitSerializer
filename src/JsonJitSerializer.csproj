@@ -6,4 +6,16 @@
     <TargetFramework>netcoreapp3.0</TargetFramework>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <PackageId>MartinCl2.Text.Json.Serialization</PackageId>
+    <Title>JsonJitSerializer</Title>
+    <Version>1.0.0</Version>
+    <Description>Just-in-time compiled JSON serialization utilizing System.Text.Json</Description>
+    <Authors>Martin Chloride</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/Martin1994/JsonJitSerializer</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>JSON,serialization,JIT,IL,Emit</PackageTags>
+  </PropertyGroup>
+
 </Project>

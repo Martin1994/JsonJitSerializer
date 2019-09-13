@@ -1,7 +1,5 @@
 # JSON Serializer JIT Compiler for .NET Core 3.0
 
-__Note: This package is currently only for experiment purpose. APIs may be changed at any time.__
-
 Emit CIL (MSIL) code at runtime for serializing JSON object, utilizing the `System.Test.Json` namespace provided since .NET Core 3.0.
 
 # Example usage
