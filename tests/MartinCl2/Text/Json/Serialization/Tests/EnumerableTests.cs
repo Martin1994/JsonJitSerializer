@@ -15,6 +15,46 @@ namespace MartinCl2.Text.Json.Serialization.Tests
             await TestUtil.AssertJsonIsIdentical(payload);
         }
 
+        [Fact]
+        public async Task ValueTypeEnumeratorTest()
+        {
+            HashSet<int> payload = new HashSet<int>() { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+
+            await TestUtil.AssertJsonIsIdentical(payload);
+        }
+
+        [Fact]
+        public async Task ListTest()
+        {
+            List<int> payload = new List<int>() { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+
+            await TestUtil.AssertJsonIsIdentical(payload);
+        }
+
+        [Fact]
+        public async Task IEnumerableTest()
+        {
+            IEnumerable<int> payload = new List<int>() { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+
+            await TestUtil.AssertJsonIsIdentical(payload);
+        }
+
+        [Fact]
+        public async Task IListTest()
+        {
+            IList<int> payload = new List<int>() { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+
+            await TestUtil.AssertJsonIsIdentical(payload);
+        }
+
+        [Fact]
+        public async Task IReadOnlyListTest()
+        {
+            IReadOnlyList<int> payload = new List<int>() { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+
+            await TestUtil.AssertJsonIsIdentical(payload);
+        }
+
         public class IEnumerableTestPayload : IEnumerable<int>
         {
             private IEnumerable<int> Generate()
@@ -44,6 +84,6 @@ namespace MartinCl2.Text.Json.Serialization.Tests
         }
 
         [Fact]
-        public async Task IEnumerableTest() => await TestUtil.TestSerializationWithDefaultProperties<IEnumerableTestPayload>();
+        public async Task CustomEnumerableTest() => await TestUtil.TestSerializationWithDefaultProperties<IEnumerableTestPayload>();
     }
 }

@@ -46,16 +46,17 @@ The dynamic class contains a list of `Object` fields used as serialization stack
 * `struct` serialization.
 * Correctly deal with ref getter.
 * `IEnumerable<T>` and `IDictionary<string, T>` serialization.
+* Value type enumerator optimization.
 * O(`depth of structure` + `number of dictionary`) runtime memory consumption.
 
 # Roadmap (randomly ordered)
 
-* Reduce the number of memory allocations.
 * Support element converter for `IEnumerable<T>` and `IDictionary<string, T>`. _(Not supported in the official `JsonSerializer` yet)_
 * Optionally skip null. _(Looks like [the official implementation always keeps null](https://github.com/dotnet/corefx/issues/38492).)_
 * Avoid boxing for struct?
 * Pointer type serialization?
 * Pointer getter?
+* Unit test for Enum.
 
 # How to: Run unit tests and generate code coverage
 
@@ -63,7 +64,7 @@ The dynamic class contains a list of `Object` fields used as serialization stack
 
 # Benchmark
 
-Framework: [dotnet/performance/micro](https://github.com/dotnet/performance/tree/master/src/benchmarks/micro)
+Framework: my fork of [dotnet/performance/micro](https://github.com/Martin1994/performance/tree/system-text-json-benchmarks/src/benchmarks/micro) (forked from a [fork](https://github.com/NickCraver/performance/tree/craver/system-text-json-benchmarks) of [dotnet/performance](https://github.com/dotnet/performance))
 
 Command: `dotnet run -c Release -f netcoreapp3.0 --filter *Json_ToStream*`
 
@@ -72,57 +73,9 @@ Command: `dotnet run -c Release -f netcoreapp3.0 --filter *Json_ToStream*`
 
 BenchmarkDotNet=v0.11.3.1003-nightly, OS=Windows 10.0.18362
 Intel Core i7-9700K CPU 3.60GHz, 1 CPU, 8 logical and 8 physical cores
-.NET Core SDK=3.0.100-preview8-013656
-  [Host]     : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
-  Job-HAPJHM : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
-
-IterationTime=250.0000 ms  MaxIterationCount=20  MinIterationCount=15  
-WarmupCount=1  
-
-```
-|                     Method |     Mean |      Error |     StdDev |   Median |      Min |      Max | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
-|--------------------------- |---------:|-----------:|-----------:|---------:|---------:|---------:|------------:|------------:|------------:|--------------------:|
-|                        Jil | 203.9 ns |  0.2430 ns |  0.2273 ns | 203.8 ns | 203.7 ns | 204.3 ns |           - |           - |           - |                   - |
-|                   JSON.NET | 515.9 ns |  0.6559 ns |  0.6135 ns | 515.8 ns | 515.3 ns | 517.6 ns |      0.0701 |           - |           - |               448 B |
-|                   Utf8Json | 130.4 ns |  0.1067 ns |  0.0998 ns | 130.4 ns | 130.3 ns | 130.6 ns |           - |           - |           - |                   - |
-| DataContractJsonSerializer | 958.6 ns | 15.4578 ns | 14.4592 ns | 950.5 ns | 948.3 ns | 984.5 ns |      0.1602 |           - |           - |              1008 B |
-|           System.Text.Json | 582.8 ns |  0.8554 ns |  0.7583 ns | 582.7 ns | 581.7 ns | 584.2 ns |      0.0979 |           - |           - |               616 B |
-|     System.Text.Json_Async | 588.2 ns |  1.1292 ns |  1.0563 ns | 588.4 ns | 585.8 ns | 589.5 ns |      0.0471 |           - |           - |               304 B |
-|        MartinCl2.Text.Json | 249.2 ns |  1.4094 ns |  1.3183 ns | 249.6 ns | 247.3 ns | 251.2 ns |      0.0685 |           - |           - |               432 B |
-|  MartinCl2.Text.Json_Async | 340.1 ns |  0.4841 ns |  0.4528 ns | 340.3 ns | 339.6 ns | 340.8 ns |      0.0231 |           - |           - |               152 B |
-
-## Json_ToStream_Location_
-``` ini
-
-BenchmarkDotNet=v0.11.3.1003-nightly, OS=Windows 10.0.18362
-Intel Core i7-9700K CPU 3.60GHz, 1 CPU, 8 logical and 8 physical cores
-.NET Core SDK=3.0.100-preview8-013656
-  [Host]     : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
-  Job-HAPJHM : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
-
-IterationTime=250.0000 ms  MaxIterationCount=20  MinIterationCount=15  
-WarmupCount=1  
-
-```
-|                     Method |       Mean |     Error |    StdDev |     Median |        Min |        Max | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
-|--------------------------- |-----------:|----------:|----------:|-----------:|-----------:|-----------:|------------:|------------:|------------:|--------------------:|
-|                        Jil |   451.8 ns | 8.3706 ns | 7.8299 ns |   446.6 ns |   445.7 ns |   463.6 ns |      0.0143 |           - |           - |                96 B |
-|                   JSON.NET | 1,177.9 ns | 1.0522 ns | 0.8786 ns | 1,177.8 ns | 1,177.0 ns | 1,180.2 ns |      0.0709 |           - |           - |               448 B |
-|                   Utf8Json |   286.7 ns | 0.1234 ns | 0.1030 ns |   286.7 ns |   286.6 ns |   287.0 ns |           - |           - |           - |                   - |
-| DataContractJsonSerializer | 2,111.0 ns | 2.4330 ns | 2.2759 ns | 2,110.7 ns | 2,108.2 ns | 2,115.4 ns |      0.1605 |           - |           - |              1008 B |
-|           System.Text.Json | 1,373.4 ns | 3.8975 ns | 3.6457 ns | 1,374.8 ns | 1,365.5 ns | 1,377.5 ns |      0.1252 |           - |           - |               808 B |
-|     System.Text.Json_Async | 1,360.9 ns | 1.6562 ns | 1.4682 ns | 1,360.7 ns | 1,358.7 ns | 1,363.3 ns |      0.0756 |           - |           - |               496 B |
-|        MartinCl2.Text.Json |   612.6 ns | 0.9984 ns | 0.8851 ns |   612.8 ns |   611.2 ns |   614.5 ns |      0.0686 |           - |           - |               432 B |
-|  MartinCl2.Text.Json_Async |   745.9 ns | 1.8611 ns | 1.7409 ns |   744.9 ns |   744.3 ns |   749.9 ns |      0.0237 |           - |           - |               152 B |
-
-## Json_ToStream_IndexViewModel_
-``` ini
-
-BenchmarkDotNet=v0.11.3.1003-nightly, OS=Windows 10.0.18362
-Intel Core i7-9700K CPU 3.60GHz, 1 CPU, 8 logical and 8 physical cores
-.NET Core SDK=3.0.100-preview8-013656
-  [Host]     : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
-  Job-HAPJHM : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
+.NET Core SDK=3.0.100-preview9-014004
+  [Host]     : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
+  Job-RUHLRH : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
 
 IterationTime=250.0000 ms  MaxIterationCount=20  MinIterationCount=15  
 WarmupCount=1  
@@ -130,47 +83,23 @@ WarmupCount=1
 ```
 |                     Method |     Mean |     Error |    StdDev |   Median |      Min |      Max | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
 |--------------------------- |---------:|----------:|----------:|---------:|---------:|---------:|------------:|------------:|------------:|--------------------:|
-|                        Jil | 34.73 us | 0.0379 us | 0.0354 us | 34.72 us | 34.68 us | 34.79 us |           - |           - |           - |                96 B |
-|                   JSON.NET | 32.98 us | 0.1064 us | 0.0995 us | 32.96 us | 32.84 us | 33.16 us |      0.2631 |           - |           - |              2448 B |
-|                   Utf8Json | 20.13 us | 0.3967 us | 0.4074 us | 20.17 us | 19.60 us | 20.78 us |           - |           - |           - |                   - |
-| DataContractJsonSerializer | 73.52 us | 0.2502 us | 0.2341 us | 73.58 us | 73.07 us | 73.81 us |      0.2939 |           - |           - |              2432 B |
-|           System.Text.Json | 32.51 us | 0.0555 us | 0.0492 us | 32.50 us | 32.43 us | 32.59 us |      1.9531 |           - |           - |             12472 B |
-|     System.Text.Json_Async | 32.32 us | 0.0754 us | 0.0669 us | 32.30 us | 32.25 us | 32.45 us |      1.1574 |           - |           - |              7784 B |
-|        MartinCl2.Text.Json | 19.57 us | 0.0120 us | 0.0113 us | 19.57 us | 19.55 us | 19.59 us |      0.7044 |           - |           - |              4848 B |
-|  MartinCl2.Text.Json_Async | 19.14 us | 0.3392 us | 0.3173 us | 18.95 us | 18.85 us | 19.67 us |           - |           - |           - |               192 B |
+|                        Jil | 201.1 ns | 1.8839 ns | 1.7622 ns | 200.1 ns | 199.7 ns | 205.0 ns |           - |           - |           - |                   - |
+|                   JSON.NET | 500.2 ns | 0.8144 ns | 0.6801 ns | 500.4 ns | 498.6 ns | 501.2 ns |      0.0699 |           - |           - |               448 B |
+|                   Utf8Json | 121.6 ns | 0.1952 ns | 0.1630 ns | 121.6 ns | 121.4 ns | 121.9 ns |           - |           - |           - |                   - |
+| DataContractJsonSerializer | 885.6 ns | 2.1066 ns | 1.7591 ns | 885.6 ns | 883.6 ns | 889.9 ns |      0.1603 |           - |           - |              1008 B |
+|           System.Text.Json | 578.6 ns | 1.7358 ns | 1.6236 ns | 578.4 ns | 576.3 ns | 582.2 ns |      0.0975 |           - |           - |               616 B |
+|     System.Text.Json_Async | 592.6 ns | 1.3711 ns | 1.2825 ns | 592.6 ns | 590.9 ns | 594.8 ns |      0.0471 |           - |           - |               304 B |
+|        MartinCl2.Text.Json | 245.7 ns | 1.0642 ns | 0.9954 ns | 245.6 ns | 244.5 ns | 247.6 ns |      0.0680 |           - |           - |               432 B |
+|  MartinCl2.Text.Json_Async | 346.0 ns | 1.6620 ns | 1.5547 ns | 345.4 ns | 344.4 ns | 349.2 ns |      0.0239 |           - |           - |               152 B |
 
-## Json_ToStream_MyEventsListerViewModel_
+## Json_ToStream_Location_
 ``` ini
 
 BenchmarkDotNet=v0.11.3.1003-nightly, OS=Windows 10.0.18362
 Intel Core i7-9700K CPU 3.60GHz, 1 CPU, 8 logical and 8 physical cores
-.NET Core SDK=3.0.100-preview8-013656
-  [Host]     : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
-  Job-HAPJHM : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
-
-IterationTime=250.0000 ms  MaxIterationCount=20  MinIterationCount=15  
-WarmupCount=1  
-
-```
-|                     Method |     Mean |      Error |     StdDev |   Median |      Min |      Max | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
-|--------------------------- |---------:|-----------:|-----------:|---------:|---------:|---------:|------------:|------------:|------------:|--------------------:|
-|                        Jil | 440.6 us |  0.8454 us |  0.7495 us | 440.6 us | 439.1 us | 441.6 us |     32.6923 |           - |           - |           207.09 KB |
-|                   JSON.NET | 671.5 us | 12.7772 us | 11.3267 us | 666.1 us | 662.1 us | 693.6 us |     37.2093 |           - |           - |            229.7 KB |
-|                   Utf8Json | 532.3 us |  1.5443 us |  1.4445 us | 532.0 us | 530.0 us | 535.4 us |     40.3397 |     40.3397 |     40.3397 |           200.25 KB |
-| DataContractJsonSerializer | 706.0 us |  0.8780 us |  0.8213 us | 706.1 us | 704.5 us | 707.4 us |      2.8169 |           - |           - |            23.63 KB |
-|           System.Text.Json | 585.2 us |  0.9010 us |  0.7987 us | 584.9 us | 584.4 us | 587.0 us |     46.2963 |           - |           - |           295.52 KB |
-|     System.Text.Json_Async | 589.5 us |  0.9227 us |  0.7705 us | 589.4 us | 588.1 us | 590.8 us |     46.0526 |           - |           - |           290.94 KB |
-|        MartinCl2.Text.Json | 498.3 us |  6.3951 us |  5.9819 us | 498.6 us | 491.6 us | 508.6 us |     36.2903 |           - |           - |           225.88 KB |
-|  MartinCl2.Text.Json_Async | 606.3 us |  1.4433 us |  1.3501 us | 606.0 us | 604.0 us | 608.8 us |     34.2466 |           - |           - |           221.33 KB |
-
-## Json_ToStream_CollectionsOfPrimitives_
-``` ini
-
-BenchmarkDotNet=v0.11.3.1003-nightly, OS=Windows 10.0.18362
-Intel Core i7-9700K CPU 3.60GHz, 1 CPU, 8 logical and 8 physical cores
-.NET Core SDK=3.0.100-preview8-013656
-  [Host]     : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
-  Job-HAPJHM : .NET Core 3.0.0-preview8-28405-07 (CoreCLR 4.700.19.37902, CoreFX 4.700.19.40503), 64bit RyuJIT
+.NET Core SDK=3.0.100-preview9-014004
+  [Host]     : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
+  Job-RUHLRH : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
 
 IterationTime=250.0000 ms  MaxIterationCount=20  MinIterationCount=15  
 WarmupCount=1  
@@ -178,15 +107,83 @@ WarmupCount=1
 ```
 |                     Method |       Mean |     Error |    StdDev |     Median |        Min |        Max | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
 |--------------------------- |-----------:|----------:|----------:|-----------:|-----------:|-----------:|------------:|------------:|------------:|--------------------:|
-|                        Jil |   264.7 us | 0.4846 us | 0.4296 us |   264.6 us |   264.3 us |   265.9 us |           - |           - |           - |                96 B |
-|                   JSON.NET |   356.4 us | 1.2230 us | 1.1440 us |   356.0 us |   355.0 us |   358.9 us |     17.0455 |           - |           - |            107136 B |
-|                   Utf8Json |   218.4 us | 0.3460 us | 0.3067 us |   218.3 us |   218.0 us |   219.0 us |           - |           - |           - |              2760 B |
-| DataContractJsonSerializer | 1,208.2 us | 2.3727 us | 2.2194 us | 1,208.1 us | 1,204.2 us | 1,212.6 us |      9.6618 |           - |           - |             74928 B |
-|           System.Text.Json |         NA |        NA |        NA |         NA |         NA |         NA |           - |           - |           - |                   - |
-|     System.Text.Json_Async |         NA |        NA |        NA |         NA |         NA |         NA |           - |           - |           - |                   - |
-|        MartinCl2.Text.Json | 1,642.6 us | 4.5183 us | 3.7730 us | 1,642.5 us | 1,637.3 us | 1,649.5 us |     39.7351 |           - |           - |            283472 B |
-|  MartinCl2.Text.Json_Async | 1,669.9 us | 4.8922 us | 4.3368 us | 1,668.3 us | 1,665.6 us | 1,679.3 us |     40.0000 |           - |           - |            278816 B |
+|                        Jil |   431.8 ns | 0.5931 ns | 0.5548 ns |   431.9 ns |   430.9 ns |   432.7 ns |      0.0140 |           - |           - |                96 B |
+|                   JSON.NET | 1,186.6 ns | 1.7353 ns | 1.5383 ns | 1,186.6 ns | 1,184.2 ns | 1,189.0 ns |      0.0710 |           - |           - |               448 B |
+|                   Utf8Json |   278.0 ns | 0.3577 ns | 0.3171 ns |   277.9 ns |   277.6 ns |   278.6 ns |           - |           - |           - |                   - |
+| DataContractJsonSerializer | 2,069.2 ns | 3.5186 ns | 2.9382 ns | 2,068.3 ns | 2,065.5 ns | 2,074.2 ns |      0.1570 |           - |           - |              1008 B |
+|           System.Text.Json | 1,345.9 ns | 6.0559 ns | 5.6647 ns | 1,344.9 ns | 1,335.8 ns | 1,357.7 ns |      0.1283 |           - |           - |               808 B |
+|     System.Text.Json_Async | 1,328.9 ns | 1.4862 ns | 1.2410 ns | 1,329.0 ns | 1,327.1 ns | 1,331.0 ns |      0.0744 |           - |           - |               496 B |
+|        MartinCl2.Text.Json |   599.0 ns | 0.7990 ns | 0.6238 ns |   599.0 ns |   597.7 ns |   600.2 ns |      0.0673 |           - |           - |               432 B |
+|  MartinCl2.Text.Json_Async |   720.0 ns | 1.1003 ns | 1.0293 ns |   720.2 ns |   717.6 ns |   721.6 ns |      0.0231 |           - |           - |               152 B |
 
-Benchmarks with issues:
-  Json_ToStream<CollectionsOfPrimitives>.System.Text.Json: Job-HAPJHM(IterationTime=250.0000 ms, MaxIterationCount=20, MinIterationCount=15, WarmupCount=1)
-  Json_ToStream<CollectionsOfPrimitives>.System.Text.Json_Async: Job-HAPJHM(IterationTime=250.0000 ms, MaxIterationCount=20, MinIterationCount=15, WarmupCount=1)
+## Json_ToStream_IndexViewModel_
+``` ini
+
+BenchmarkDotNet=v0.11.3.1003-nightly, OS=Windows 10.0.18362
+Intel Core i7-9700K CPU 3.60GHz, 1 CPU, 8 logical and 8 physical cores
+.NET Core SDK=3.0.100-preview9-014004
+  [Host]     : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
+  Job-RUHLRH : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
+
+IterationTime=250.0000 ms  MaxIterationCount=20  MinIterationCount=15  
+WarmupCount=1  
+
+```
+|                     Method |     Mean |     Error |    StdDev |   Median |      Min |      Max | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
+|--------------------------- |---------:|----------:|----------:|---------:|---------:|---------:|------------:|------------:|------------:|--------------------:|
+|                        Jil | 33.84 us | 0.2850 us | 0.2527 us | 33.72 us | 33.53 us | 34.45 us |           - |           - |           - |                96 B |
+|                   JSON.NET | 32.29 us | 0.1049 us | 0.0876 us | 32.28 us | 32.19 us | 32.54 us |      0.3891 |           - |           - |              2448 B |
+|                   Utf8Json | 19.09 us | 0.0342 us | 0.0303 us | 19.09 us | 19.03 us | 19.14 us |           - |           - |           - |                   - |
+| DataContractJsonSerializer | 69.33 us | 0.1981 us | 0.1853 us | 69.37 us | 68.93 us | 69.67 us |      0.2778 |           - |           - |              2432 B |
+|           System.Text.Json | 34.17 us | 0.1403 us | 0.1313 us | 34.11 us | 34.03 us | 34.45 us |      8.4607 |      0.8188 |           - |             53376 B |
+|     System.Text.Json_Async | 32.10 us | 0.1040 us | 0.0868 us | 32.10 us | 32.00 us | 32.32 us |      1.1527 |           - |           - |              7784 B |
+|        MartinCl2.Text.Json | 19.78 us | 0.0664 us | 0.0588 us | 19.79 us | 19.67 us | 19.90 us |      7.2509 |      0.5517 |           - |             45712 B |
+|  MartinCl2.Text.Json_Async | 18.57 us | 0.0414 us | 0.0387 us | 18.56 us | 18.52 us | 18.64 us |           - |           - |           - |               152 B |
+
+## Json_ToStream_MyEventsListerViewModel_
+``` ini
+
+BenchmarkDotNet=v0.11.3.1003-nightly, OS=Windows 10.0.18362
+Intel Core i7-9700K CPU 3.60GHz, 1 CPU, 8 logical and 8 physical cores
+.NET Core SDK=3.0.100-preview9-014004
+  [Host]     : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
+  Job-RUHLRH : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
+
+IterationTime=250.0000 ms  MaxIterationCount=20  MinIterationCount=15  
+WarmupCount=1  
+
+```
+|                     Method |     Mean |     Error |    StdDev |   Median |      Min |      Max | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
+|--------------------------- |---------:|----------:|----------:|---------:|---------:|---------:|------------:|------------:|------------:|--------------------:|
+|                        Jil | 447.8 us | 1.6482 us | 1.4611 us | 447.1 us | 446.4 us | 451.0 us |     38.3212 |           - |           - |           236.34 KB |
+|                   JSON.NET | 670.7 us | 2.6532 us | 2.4818 us | 669.7 us | 666.9 us | 676.1 us |     40.5405 |           - |           - |           258.95 KB |
+|                   Utf8Json | 527.5 us | 1.5446 us | 1.2898 us | 527.5 us | 525.7 us | 530.1 us |     39.0879 |     39.0879 |     39.0879 |            229.5 KB |
+| DataContractJsonSerializer | 696.7 us | 0.6338 us | 0.4948 us | 696.6 us | 695.9 us | 697.3 us |      2.8011 |           - |           - |            23.63 KB |
+|           System.Text.Json | 643.6 us | 4.0669 us | 3.3961 us | 642.7 us | 639.8 us | 650.2 us |     80.8824 |     40.4412 |     40.4412 |           430.45 KB |
+|     System.Text.Json_Async | 578.9 us | 3.3254 us | 2.5963 us | 578.5 us | 576.4 us | 586.7 us |     49.3421 |           - |           - |           320.19 KB |
+|        MartinCl2.Text.Json | 533.5 us | 2.3295 us | 2.1790 us | 533.5 us | 530.5 us | 539.2 us |     81.2500 |     39.5833 |     39.5833 |           357.91 KB |
+|  MartinCl2.Text.Json_Async | 607.8 us | 4.1591 us | 3.8904 us | 606.4 us | 602.2 us | 616.8 us |     38.7409 |           - |           - |           247.65 KB |
+
+## Json_ToStream_CollectionsOfPrimitives_
+``` ini
+
+BenchmarkDotNet=v0.11.3.1003-nightly, OS=Windows 10.0.18362
+Intel Core i7-9700K CPU 3.60GHz, 1 CPU, 8 logical and 8 physical cores
+.NET Core SDK=3.0.100-preview9-014004
+  [Host]     : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
+  Job-RUHLRH : .NET Core 3.0.0-preview9-19423-09 (CoreCLR 4.700.19.42102, CoreFX 4.700.19.42104), 64bit RyuJIT
+
+IterationTime=250.0000 ms  MaxIterationCount=20  MinIterationCount=15  
+WarmupCount=1  
+
+```
+|                     Method |       Mean |     Error |    StdDev |     Median |        Min |        Max | Gen 0/1k Op | Gen 1/1k Op | Gen 2/1k Op | Allocated Memory/Op |
+|--------------------------- |-----------:|----------:|----------:|-----------:|-----------:|-----------:|------------:|------------:|------------:|--------------------:|
+|                        Jil |   253.4 us | 1.0126 us | 0.8977 us |   253.1 us |   252.6 us |   255.7 us |           - |           - |           - |                96 B |
+|                   JSON.NET |   330.4 us | 0.8561 us | 0.7149 us |   330.4 us |   328.9 us |   331.7 us |     10.5960 |           - |           - |             74688 B |
+|                   Utf8Json |   213.8 us | 1.0085 us | 0.9433 us |   213.4 us |   212.8 us |   215.5 us |           - |           - |           - |              2760 B |
+| DataContractJsonSerializer | 1,178.0 us | 1.9970 us | 1.6676 us | 1,178.0 us | 1,175.9 us | 1,182.1 us |      9.4787 |           - |           - |             74928 B |
+|           System.Text.Json |   533.8 us | 0.7406 us | 0.6928 us |   533.9 us |   532.9 us |   535.0 us |     45.8333 |      6.2500 |           - |            299656 B |
+|     System.Text.Json_Async |   528.1 us | 0.7238 us | 0.5651 us |   528.1 us |   527.4 us |   528.9 us |     29.1667 |           - |           - |            188800 B |
+|        MartinCl2.Text.Json |   135.5 us | 0.6326 us | 0.5918 us |   135.5 us |   134.7 us |   136.8 us |     17.3913 |      2.1739 |           - |            110976 B |
+|  MartinCl2.Text.Json_Async |   149.6 us | 0.2230 us | 0.2086 us |   149.6 us |   149.0 us |   149.8 us |           - |           - |           - |               152 B |

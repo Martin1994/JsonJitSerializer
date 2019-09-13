@@ -58,6 +58,89 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             return compiledSerializerType;
         }
 
+        private enum EnumeratorCategory
+        {
+            Array,
+            List,
+            ValueTypeEnumerator,
+            ReferenceTypeEnumerator
+        }
+
+        private ref struct EnumerableInfo
+        {
+            public readonly EnumeratorCategory EnumeratorCategory;
+            public readonly Type EnumeratorType;
+            public readonly MethodInfo GetEnumeratorMethod;
+            public readonly MethodInfo GetCurrentMethod;
+            public readonly MethodInfo IndexAccessorMethod;
+            public readonly MethodInfo GetCountMethod;
+            public FieldBuilder EnumerableContextField;
+
+            public EnumerableInfo(ref JitILCompiler compiler, Type type, Type enumerateeType)
+            {
+                Type iCollectionType = typeof(ICollection<>).MakeGenericType(enumerateeType);
+                Type iEnumerableType = typeof(IEnumerable<>).MakeGenericType(enumerateeType);
+                Type iEnumeratorType = typeof(IEnumerator<>).MakeGenericType(enumerateeType);
+                Type iReadOnlyListType = typeof(IReadOnlyList<>).MakeGenericType(enumerateeType);
+                Type iListType = typeof(IList<>).MakeGenericType(enumerateeType);
+
+                GetEnumeratorMethod = null;
+                GetCurrentMethod = null;
+                EnumeratorType = null;
+                GetCountMethod = null;
+                IndexAccessorMethod = null;
+                EnumerableContextField = null;
+
+                MethodInfo nonvirtualGetEnumeratorMethod = type.GetMethod(
+                    name: "GetEnumerator",
+                    types: new Type[] { },
+                    modifiers: null,
+                    bindingAttr: BindingFlags.Public | BindingFlags.Instance,
+                    binder: null
+                );
+                if (type.IsArray)
+                {
+                    EnumeratorCategory = EnumeratorCategory.Array;
+                    EnumerableContextField = compiler.GetEnumeratorContextFieldAtIndex(compiler._enumerableContextFieldCount++, typeof(int));
+                }
+                else if (iReadOnlyListType.IsAssignableFrom(type) || iListType.IsAssignableFrom(type))
+                {
+                    EnumeratorCategory = EnumeratorCategory.List;
+                    EnumerableContextField = compiler.GetEnumeratorContextFieldAtIndex(compiler._enumerableContextFieldCount++, typeof(int));
+                    Type ListInterfaceType = iReadOnlyListType.IsAssignableFrom(type) ? iReadOnlyListType : iListType;
+                    GetCountMethod = GetInterfaceMethodImplementation(type, iCollectionType.GetProperty("Count").GetMethod);
+                    foreach (PropertyInfo property in ListInterfaceType.GetProperties())
+                    {
+                        if (property.GetIndexParameters().Length == 1)
+                        {
+                            IndexAccessorMethod = GetInterfaceMethodImplementation(type, property.GetMethod);
+                            break;
+                        }
+                    }
+                }
+                else if (nonvirtualGetEnumeratorMethod != null &&
+                    iEnumeratorType.IsAssignableFrom(nonvirtualGetEnumeratorMethod.ReturnType) &&
+                    nonvirtualGetEnumeratorMethod.ReturnType.IsValueType)
+                {
+                    EnumeratorCategory = EnumeratorCategory.ValueTypeEnumerator;
+                    GetEnumeratorMethod = nonvirtualGetEnumeratorMethod;
+                    EnumeratorType = nonvirtualGetEnumeratorMethod.ReturnType;
+                    GetCurrentMethod = GetInterfaceMethodImplementation(EnumeratorType, iEnumeratorType.GetProperty("Current").GetMethod);
+                    EnumerableContextField = compiler.GetEnumeratorContextFieldAtIndex(compiler._enumerableContextFieldCount++, EnumeratorType);
+                }
+                else
+                {
+                    EnumeratorCategory = EnumeratorCategory.ReferenceTypeEnumerator;
+                    GetEnumeratorMethod = iEnumerableType.GetMethod(
+                        name: "GetEnumerator",
+                        types: new Type[] { }
+                    );
+                    EnumeratorType = iEnumeratorType;
+                    GetCurrentMethod = iEnumeratorType.GetProperty("Current").GetMethod;
+                }
+            }
+        }
+
         private Action<Type> _followUp;
 
         private readonly Type _rootType;
@@ -92,6 +175,9 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
         private FieldBuilder _jumpTableProgressField;
 
+        private List<FieldBuilder> _enumerableContextFields;
+        private int _enumerableContextFieldCount;
+
         private JitILCompiler(Type type, JsonSerializerOptions options, TypeBuilder tb)
         {
             _rootType = type;
@@ -104,12 +190,14 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             _converterCache = new Dictionary<JsonConverter, FieldBuilder>();
             _propertyNameCounter = -1;
             _propertyNameCache = new Dictionary<string, FieldBuilder>();
+            _enumerableContextFields = new List<FieldBuilder>();
 
             // Don't care in constructor
             _ilg = null;
             _generatingChunkMethod = false;
             _jumpTable = null;
             _jumpTableCount = 0;
+            _enumerableContextFieldCount = 0;
 
             // Define a static field for JsonSerializerOptions
             string optionsFieldName = @"Options";
@@ -171,6 +259,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
         private void GenerateChunkMethod()
         {
             _generatingChunkMethod = true;
+            _enumerableContextFieldCount = 0;
 
             MethodBuilder mb = _tb.DefineMethod(
                 name: SerializeChunkMethodName,
@@ -205,8 +294,8 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             MarkNewJumpTableLabel();
 
-            JitILCompiler that = this;
-            GenerateILForNestedType(_rootType, 0, () => that._ilg.Emit(OpCodes.Ldarg_2));
+            ILGenerator ilg = _ilg;
+            GenerateILForNestedType(_rootType, 0, () => ilg.Emit(OpCodes.Ldarg_2));
 
             // return false;
             _ilg.Emit(OpCodes.Ldc_I4_0);
@@ -216,6 +305,7 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
         private void GenerateNonChunkMethod()
         {
             _generatingChunkMethod = false;
+            _enumerableContextFieldCount = 0;
 
             MethodBuilder mb = _tb.DefineMethod(
                 name: SerializeMethodName,
@@ -240,8 +330,8 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             MarkNewJumpTableLabel();
 
-            JitILCompiler that = this;
-            GenerateILForNestedType(_rootType, 0, () => that._ilg.Emit(OpCodes.Ldarg_2));
+            ILGenerator ilg = _ilg;
+            GenerateILForNestedType(_rootType, 0, () => ilg.Emit(OpCodes.Ldarg_2));
 
             // return;
             _ilg.Emit(OpCodes.Ret);
@@ -290,18 +380,11 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             // IDictionary<string, T> also implements IEnumerable<KeyValuePair<string, T>>,
             // so it has to be checked before IEnumerable<T>
-            if (type.GetInterfaces().Any(type =>
-                type.IsGenericType &&
-                type.GetGenericTypeDefinition() == typeof(IDictionary<,>) &&
-                type.GetGenericArguments()[0] == typeof(string)
-            ))
+            if (GetIDictionaryGenericType(type)?.Key == typeof(string))
             {
                 GenerateILForIDictionary(type, depth);
             }
-            else if (type.GetInterfaces().Any(type =>
-                type.IsGenericType &&
-                type.GetGenericTypeDefinition() == typeof(IEnumerable<>)
-            ))
+            else if (GetIEnumerableGenericType(type) != null)
             {
                 GenerateILForIEnumerable(type, depth);
             }
@@ -352,20 +435,23 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 {
                     propertyTypeWithoutReference = propertyTypeWithoutReference.GetElementType();
                 }
-                JitILCompiler that = this;
+                ILGenerator ilg = _ilg;
+                FieldBuilder currentWriteStack = GetWriteStackFieldAtDepth(depth);
                 Action pushPropertyValueOntoStack = () =>
                 {
                     // obj.Property
-                    that._ilg.Emit(OpCodes.Ldarg_0);
-                    that._ilg.Emit(OpCodes.Ldfld, that.GetWriteStackFieldAtDepth(depth));
+                    ilg.Emit(OpCodes.Ldarg_0);
+                    ilg.Emit(OpCodes.Ldfld, currentWriteStack);
                     if (type.IsValueType)
                     {
-                        that._ilg.Emit(OpCodes.Unbox, type);
+                        ilg.Emit(OpCodes.Unbox, type);
                     }
-                    that.GenerateILForCallingGetMethod(getMethod);
+
+                    EmitCallVirtIfNeeded(ilg, getMethod);
+
                     if (property.PropertyType.IsByRef)
                     {
-                        that._ilg.Emit(OpCodes.Ldind_Ref);
+                        ilg.Emit(OpCodes.Ldind_Ref);
                     }
                 };
 
@@ -410,49 +496,33 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             // First argument: Utf8JsonWriter writer
             // Second argument: IEnumerable<T> enumerable
 
-            Type elementType = GetIEnumerableGenericType(type);
-            Type enumerableType = typeof(IEnumerable<>).MakeGenericType(elementType);
-            Type enumeratorType = typeof(IEnumerator<>).MakeGenericType(elementType);
+            Type enumerateeType = GetIEnumerableGenericType(type);
+            EnumerableInfo enumerableInfo = new EnumerableInfo(ref this, type, enumerateeType);
 
             // writer.WriteStartArray();
             _ilg.Emit(OpCodes.Ldarg_1);
             _ilg.Emit(OpCodes.Call, _writeStartArray);
 
-            // _writeStackX = _writeStackX.GetEnumerator();
-            _ilg.Emit(OpCodes.Ldarg_0);
-            _ilg.Emit(OpCodes.Ldarg_0);
-            _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
-            _ilg.Emit(OpCodes.Callvirt, enumerableType.GetMethod("GetEnumerator", new Type[] { }));
-            _ilg.Emit(OpCodes.Stfld, GetWriteStackFieldAtDepth(depth));
+            GenerateILForPushingEnumeratorOntoWriteStack(depth, enumerableInfo);
 
-            // while (_writeStackX.MoveNext()) {
             Label topOfIterationLoop = _ilg.DefineLabel();
             Label bottomOfIterationLoop = _ilg.DefineLabel();
             _ilg.MarkLabel(topOfIterationLoop);
-            _ilg.Emit(OpCodes.Ldarg_0);
-            _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
-            // MoveNext is defined in IEnumerator
-            _ilg.Emit(OpCodes.Callvirt, typeof(IEnumerator).GetMethod("MoveNext", new Type[] { }));
-            _ilg.Emit(OpCodes.Brfalse, bottomOfIterationLoop);
 
-            JsonConverter converter = GetConverterFromOptions(_options, elementType);
+            // while (...) {
+            GenerateILForStartEnumerableWhile(depth, enumerableInfo, bottomOfIterationLoop);
 
-            JitILCompiler that = this;
-            Action pushNextElementOntoStack = () =>
-            {
-                // _writeStackX.Current
-                that._ilg.Emit(OpCodes.Ldarg_0);
-                that._ilg.Emit(OpCodes.Ldfld, that.GetWriteStackFieldAtDepth(depth));
-                that._ilg.Emit(OpCodes.Callvirt, enumeratorType.GetProperty("Current").GetMethod);
-            };
+            Action pushNextElementOntoStack = GeneratePushNextElementOntoStackLambda(depth, enumerateeType, enumerableInfo);
+
+            JsonConverter converter = GetConverterFromOptions(_options, enumerateeType);
 
             if (converter == null)
             {
-                GenerateILForNestedType(elementType, depth + 1, pushNextElementOntoStack);
+                GenerateILForNestedType(enumerateeType, depth + 1, pushNextElementOntoStack);
             }
             else
             {
-                GenerateILForCallingConverter(elementType, pushNextElementOntoStack, converter);
+                GenerateILForCallingConverter(enumerateeType, pushNextElementOntoStack, converter);
             }
 
             // }
@@ -469,37 +539,28 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             // First argument: Utf8JsonWriter writer
             // Second argument: IDictionary<string, T> dictionary
 
-            Type valueType = GetIDictionaryValueGenericType(type);
+            Type valueType = GetIDictionaryGenericType(type)?.Value;
             Type keyValuePairType = typeof(KeyValuePair<,>).MakeGenericType(typeof(string), valueType);
-            Type enumerableType = typeof(IEnumerable<>).MakeGenericType(keyValuePairType);
-            Type enumeratorType = typeof(IEnumerator<>).MakeGenericType(keyValuePairType);
+            EnumerableInfo enumerableInfo = new EnumerableInfo(ref this, type, keyValuePairType);
 
             // writer.WriteStartObject();
             _ilg.Emit(OpCodes.Ldarg_1);
             _ilg.Emit(OpCodes.Call, _writeStartObject);
 
-            // _writeStackX = _writeStackX.GetEnumerator();
-            _ilg.Emit(OpCodes.Ldarg_0);
-            _ilg.Emit(OpCodes.Ldarg_0);
-            _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
-            _ilg.Emit(OpCodes.Callvirt, enumerableType.GetMethod("GetEnumerator", new Type[] { }));
-            _ilg.Emit(OpCodes.Stfld, GetWriteStackFieldAtDepth(depth));
+            GenerateILForPushingEnumeratorOntoWriteStack(depth, enumerableInfo);
 
-            // while (_writeStackX.MoveNext()) {
             Label topOfIterationLoop = _ilg.DefineLabel();
             Label bottomOfIterationLoop = _ilg.DefineLabel();
             _ilg.MarkLabel(topOfIterationLoop);
-            _ilg.Emit(OpCodes.Ldarg_0);
-            _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
-            // MoveNext is defined in IEnumerator
-            _ilg.Emit(OpCodes.Callvirt, typeof(IEnumerator).GetMethod("MoveNext", new Type[] { }));
-            _ilg.Emit(OpCodes.Brfalse, bottomOfIterationLoop);
+
+            // while (...) {
+            GenerateILForStartEnumerableWhile(depth, enumerableInfo, bottomOfIterationLoop);
+
+            Action pushNextKeyValuePairOntoStack = GeneratePushNextElementOntoStackLambda(depth, keyValuePairType, enumerableInfo);
 
             // KeyValuePair<string, T> kvp = _writeStackX.Current;
             LocalBuilder kvpLocal = _ilg.DeclareLocal(keyValuePairType);
-            _ilg.Emit(OpCodes.Ldarg_0);
-            _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
-            _ilg.Emit(OpCodes.Callvirt, enumeratorType.GetProperty("Current").GetMethod);
+            pushNextKeyValuePairOntoStack();
             _ilg.Emit(OpCodes.Stloc, kvpLocal);
 
             // writer.WritePropertyName(DictionaryKeyPolicyField.ConvertName(Namekvp.Key))
@@ -518,21 +579,21 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
 
             JsonConverter converter = GetConverterFromOptions(_options, valueType);
 
-            JitILCompiler that = this;
-            Action pushNextElementOntoStack = () =>
+            ILGenerator ilg = _ilg;
+            Action pushValueOntoStack = () =>
             {
                 // kvp.Value
-                that._ilg.Emit(OpCodes.Ldloca, kvpLocal);
-                that._ilg.Emit(OpCodes.Call, keyValuePairType.GetProperty("Value").GetMethod);
+                ilg.Emit(OpCodes.Ldloca, kvpLocal);
+                ilg.Emit(OpCodes.Call, keyValuePairType.GetProperty("Value").GetMethod);
             };
 
             if (converter == null)
             {
-                GenerateILForNestedType(valueType, depth + 1, pushNextElementOntoStack);
+                GenerateILForNestedType(valueType, depth + 1, pushValueOntoStack);
             }
             else
             {
-                GenerateILForCallingConverter(valueType, pushNextElementOntoStack, converter);
+                GenerateILForCallingConverter(valueType, pushValueOntoStack, converter);
             }
 
             // }
@@ -542,6 +603,143 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             // writer.WriteEndObject();
             _ilg.Emit(OpCodes.Ldarg_1);
             _ilg.Emit(OpCodes.Call, _writeEndObject);
+        }
+
+        private void GenerateILForPushingEnumeratorOntoWriteStack(int depth, EnumerableInfo enumerableInfo)
+        {
+            switch (enumerableInfo.EnumeratorCategory)
+            {
+                case EnumeratorCategory.Array:
+                case EnumeratorCategory.List:
+                    // _enumerableContextX = -1;
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldc_I4_M1);
+                    _ilg.Emit(OpCodes.Stfld, enumerableInfo.EnumerableContextField);
+                    break;
+
+                case EnumeratorCategory.ValueTypeEnumerator:
+                    // _enumerableContextX = _writeStackX.GetEnumerator();
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
+                    _ilg.Emit(OpCodes.Call, enumerableInfo.GetEnumeratorMethod); // struct method cannot be virtual
+                    _ilg.Emit(OpCodes.Stfld, enumerableInfo.EnumerableContextField);
+                    break;
+
+                case EnumeratorCategory.ReferenceTypeEnumerator:
+                    // _writeStackX = _writeStackX.GetEnumerator();
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
+                    _ilg.Emit(OpCodes.Callvirt, enumerableInfo.GetEnumeratorMethod);
+                    _ilg.Emit(OpCodes.Stfld, GetWriteStackFieldAtDepth(depth));
+                    break;
+            }
+        }
+
+        private void GenerateILForStartEnumerableWhile(int depth, EnumerableInfo enumerableInfo, Label bottomOfIterationLoop)
+        {
+            switch (enumerableInfo.EnumeratorCategory)
+            {
+                case EnumeratorCategory.Array:
+                case EnumeratorCategory.List:
+                    // _enumerableContextX++
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldfld, enumerableInfo.EnumerableContextField);
+                    _ilg.Emit(OpCodes.Ldc_I4_1);
+                    _ilg.Emit(OpCodes.Add);
+                    _ilg.Emit(OpCodes.Stfld, enumerableInfo.EnumerableContextField);
+
+                    // while (_enumerableContextX < _writeStackX.Length/Count)
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldfld, enumerableInfo.EnumerableContextField);
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
+                    if (enumerableInfo.EnumeratorCategory == EnumeratorCategory.Array)
+                    {
+                        _ilg.Emit(OpCodes.Ldlen);
+                    }
+                    else
+                    {
+                        EmitCallVirtIfNeeded(_ilg, enumerableInfo.GetCountMethod);
+                    }
+                    _ilg.Emit(OpCodes.Bge, bottomOfIterationLoop);
+                    break;
+
+                case EnumeratorCategory.ValueTypeEnumerator:
+                    // while (_enumerableContextX.MoveNext()) {
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldflda, enumerableInfo.EnumerableContextField);
+                    MethodInfo moveNextInterfaceMethod = typeof(IEnumerator).GetMethod("MoveNext", new Type[] { });
+                    MethodInfo moveNextMethod = GetInterfaceMethodImplementation(enumerableInfo.EnumeratorType, moveNextInterfaceMethod);
+                    _ilg.Emit(OpCodes.Call, moveNextMethod);
+                    _ilg.Emit(OpCodes.Brfalse, bottomOfIterationLoop);
+                    break;
+
+                case EnumeratorCategory.ReferenceTypeEnumerator:
+                    // while (_writeStackX.MoveNext()) {
+                    _ilg.Emit(OpCodes.Ldarg_0);
+                    _ilg.Emit(OpCodes.Ldfld, GetWriteStackFieldAtDepth(depth));
+                    // MoveNext is defined in IEnumerator
+                    _ilg.Emit(OpCodes.Callvirt, typeof(IEnumerator).GetMethod("MoveNext", new Type[] { }));
+                    _ilg.Emit(OpCodes.Brfalse, bottomOfIterationLoop);
+                    break;
+            }
+        }
+
+        private Action GeneratePushNextElementOntoStackLambda(int depth, Type enumerateeType, EnumerableInfo enumerableInfo)
+        {
+            ILGenerator ilg = _ilg;
+            FieldBuilder currentWriteStack = GetWriteStackFieldAtDepth(depth);
+            FieldBuilder enumerableContextField = enumerableInfo.EnumerableContextField;
+            MethodInfo getCurrentMethod;
+            switch (enumerableInfo.EnumeratorCategory)
+            {
+                case EnumeratorCategory.Array:
+                    return () =>
+                    {
+                        // _writeStackX[_enumerableContextX]
+                        ilg.Emit(OpCodes.Ldarg_0);
+                        ilg.Emit(OpCodes.Ldfld, currentWriteStack);
+                        ilg.Emit(OpCodes.Ldarg_0);
+                        ilg.Emit(OpCodes.Ldfld, enumerableContextField);
+                        ilg.Emit(OpCodes.Ldelem, enumerateeType);
+                    };
+
+                case EnumeratorCategory.List:
+                    getCurrentMethod = enumerableInfo.IndexAccessorMethod;
+                    return () =>
+                    {
+                        // _writeStackX[_enumerableContextX]
+                        ilg.Emit(OpCodes.Ldarg_0);
+                        ilg.Emit(OpCodes.Ldfld, currentWriteStack);
+                        ilg.Emit(OpCodes.Ldarg_0);
+                        ilg.Emit(OpCodes.Ldfld, enumerableContextField);
+                        EmitCallVirtIfNeeded(ilg, getCurrentMethod);
+                    };
+
+                case EnumeratorCategory.ValueTypeEnumerator:
+                    getCurrentMethod = enumerableInfo.GetCurrentMethod;
+                    return () =>
+                    {
+                        // _enumerableContextX.Current
+                        ilg.Emit(OpCodes.Ldarg_0);
+                        ilg.Emit(OpCodes.Ldflda, enumerableContextField);
+                        ilg.Emit(OpCodes.Call, getCurrentMethod);
+                    };
+
+                default: // Supress compiler error
+                case EnumeratorCategory.ReferenceTypeEnumerator:
+                    getCurrentMethod = enumerableInfo.GetCurrentMethod;
+                    return () =>
+                    {
+                        // _writeStackX.Current
+                        ilg.Emit(OpCodes.Ldarg_0);
+                        ilg.Emit(OpCodes.Ldfld, currentWriteStack);
+                        ilg.Emit(OpCodes.Callvirt, getCurrentMethod);
+                    };
+            }
         }
 
         private void GenerateILForWritingPropertyName(PropertyInfo property)
@@ -639,18 +837,6 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             MarkNewJumpTableLabel();
         }
 
-        private void GenerateILForCallingGetMethod(MethodInfo getMethod)
-        {
-            if (!getMethod.IsVirtual || getMethod.IsFinal)
-            {
-                _ilg.Emit(OpCodes.Call, getMethod);
-            }
-            else
-            {
-                _ilg.Emit(OpCodes.Callvirt, getMethod);
-            }
-        }
-
         private FieldBuilder GetWriteStackFieldAtDepth(int depth)
         {
             while (_writeStack.Count <= depth)
@@ -662,6 +848,19 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
                 ));
             }
             return _writeStack[depth];
+        }
+
+        private FieldBuilder GetEnumeratorContextFieldAtIndex(int index, Type fieldType)
+        {
+            if (_enumerableContextFields.Count <= index)
+            {
+                _enumerableContextFields.Add(_tb.DefineField(
+                    fieldName: "_enumerableContext" + index,
+                    type: fieldType,
+                    attributes: FieldAttributes.Private
+                ));
+            }
+            return _enumerableContextFields[index];
         }
 
         private static Type GetConverterGenericType(Type converterType) => GetGenericTypesFromParent(converterType, typeof(JsonConverter<>))[0];
@@ -676,20 +875,29 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             return subType.GetGenericArguments();
         }
 
-        private static Type GetIEnumerableGenericType(Type ienumerableType)
+        private static Type GetIEnumerableGenericType(Type iEnumerableType)
         {
-            return ienumerableType
+            return iEnumerableType
                 .GetInterfaces()
-                .First(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+                .Append(iEnumerableType)
+                .FirstOrDefault(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IEnumerable<>))
                 ?.GetGenericArguments()[0];
         }
 
-        private static Type GetIDictionaryValueGenericType(Type idictionaryType)
+        private static KeyValuePair<Type, Type>? GetIDictionaryGenericType(Type iDictionaryType)
         {
-            return idictionaryType
+            Type[] genericTypes = iDictionaryType
                 .GetInterfaces()
-                .First(type => type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IDictionary<,>))
-                ?.GetGenericArguments()[1];
+                .Append(iDictionaryType)
+                .FirstOrDefault(type => type.IsGenericType && (type.GetGenericTypeDefinition() == typeof(IDictionary<,>) || type.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>)))
+                ?.GetGenericArguments();
+
+            if (genericTypes == null)
+            {
+                return null;
+            }
+
+            return new KeyValuePair<Type, Type>(genericTypes[0], genericTypes[1]);
         }
 
         private static void CheckTypeAccessibility(Type type)
@@ -697,6 +905,29 @@ namespace MartinCl2.Text.Json.Serialization.Compiler
             if (!type.IsVisible)
             {
                 throw new TypeAccessException(String.Format("{0} is not visible.", type.FullName));
+            }
+        }
+
+        private static MethodInfo GetInterfaceMethodImplementation(Type type, MethodInfo interfaceMethod)
+        {
+            if (type.IsInterface)
+            {
+                return interfaceMethod;
+            }
+            InterfaceMapping map = type.GetInterfaceMap(interfaceMethod.DeclaringType);
+            int index = Array.IndexOf(map.InterfaceMethods, interfaceMethod);
+            return map.TargetMethods[index];
+        }
+
+        private static void EmitCallVirtIfNeeded(ILGenerator ilg, MethodInfo method)
+        {
+            if (!method.IsVirtual || method.IsFinal)
+            {
+                ilg.Emit(OpCodes.Call, method);
+            }
+            else
+            {
+                ilg.Emit(OpCodes.Callvirt, method);
             }
         }
 
