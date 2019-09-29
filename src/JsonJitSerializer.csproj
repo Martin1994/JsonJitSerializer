@@ -10,7 +10,7 @@
     <PackageId>MartinCl2.Text.Json.Serialization</PackageId>
     <Title>JsonJitSerializer</Title>
     <Version>1.0.0</Version>
-    <Description>Just-in-time compiled JSON serialization utilizing System.Text.Json</Description>
+    <Description>Emit CIL/MSIL code at runtime for JSON serialization, utilizing the `System.Test.Json` namespace provided since .NET Core 3.0.</Description>
     <Authors>Martin Chloride</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Martin1994/JsonJitSerializer</RepositoryUrl>

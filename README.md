@@ -1,32 +1,36 @@
 # JSON Serializer JIT Compiler for .NET Core 3.0
 
-Emit CIL (MSIL) code at runtime for serializing JSON object, utilizing the `System.Test.Json` namespace provided since .NET Core 3.0.
+Emit CIL/MSIL code at runtime for JSON serialization, utilizing the `System.Test.Json` namespace provided since .NET Core 3.0.
 
-# Example usage
+# Installation
+
+```sh
+dotnet add package MartinCl2.Text.Json.Serialization
+```
+
+https://www.nuget.org/packages/MartinCl2.Text.Json.Serialization
+
+# Usage
 
 ```C#
-static string CompileAndSerialize<T>(T obj)
+public static class Example<T>
 {
-    JsonJitSerializer<T> serializer = JsonJitSerializer<T>.Compile(new JsonSerializerOptions()
+    private static JsonJitSerializer<T> serializer = JsonJitSerializer<T>.Compile(new JsonSerializerOptions()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     });
 
-    return serializer.Serialize(obj);
-}
-
-static async Task CompileAndSerializeAsync<T>(Stream stream, T obj)
-{
-    JsonJitSerializer<T> serializer = JsonJitSerializer<T>.Compile(new JsonSerializerOptions()
+    public static string SerializeToString<T>(T obj)
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    });
+        return serializer.Serialize(obj);
+    }
 
-    using (Utf8JsonWriter writer = new Utf8JsonWriter(stream))
+    public static async Task SerializeToStreamAsync(Stream stream, T obj)
     {
-        await serializer.SerializeAsync(writer, obj);
+        await serializer.SerializeAsync(stream, obj);
     }
 }
+
 ```
 
 # High level design
